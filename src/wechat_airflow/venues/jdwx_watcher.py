@@ -9,6 +9,7 @@
 import datetime
 import random
 import time
+from typing import Any, cast
 
 import requests
 from airflow.sdk import Variable
@@ -20,7 +21,7 @@ from wechat_airflow.notifications.webapp import (
 from wechat_airflow.notifications.wechat import send_wechat_text_to_chatrooms_best_effort
 
 
-def print_with_timestamp(*args, **kwargs):
+def print_with_timestamp(*args: object, **kwargs: Any) -> None:
     """打印函数带上当前时间戳"""
     timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())
     print(timestamp, *args, **kwargs)
@@ -58,11 +59,11 @@ def merge_time_ranges(data: list[list[str]]) -> list[list[str]]:
     return result
 
 
-def update_proxy_cache(proxy: str, success: bool):
+def update_proxy_cache(proxy: str, success: bool) -> list[str]:
     """更新代理缓存"""
     cache_key = "JDWX_PROXY_CACHE"
     try:
-        cached_proxies = Variable.get(cache_key, deserialize_json=True, default=[])
+        cached_proxies = cast(list[str], Variable.get(cache_key, deserialize_json=True, default=[]))
     except Exception:
         cached_proxies = []
 
@@ -82,7 +83,9 @@ def update_proxy_cache(proxy: str, success: bool):
     return cached_proxies
 
 
-def get_free_tennis_court_infos_for_hjd(date: str, proxy_list: list) -> dict:
+def get_free_tennis_court_infos_for_hjd(
+    date: str, proxy_list: list[str]
+) -> dict[str, list[list[str]]]:
     """从弘金地获取可预订的场地信息"""
     got_response = False
     response = None
@@ -175,7 +178,7 @@ def get_free_tennis_court_infos_for_hjd(date: str, proxy_list: list) -> dict:
         raise Exception("all proxies failed")
 
 
-def run_check_tennis_courts():
+def run_check_tennis_courts() -> None:
     """主要检查逻辑"""
     if datetime.time(0, 0) <= datetime.datetime.now().time() < datetime.time(8, 0):
         print("每天0点-8点不巡检")
@@ -195,7 +198,7 @@ def run_check_tennis_courts():
     print(f"Loaded {len(proxy_list)} proxies from {url}")
 
     # 查询空闲的球场信息
-    up_for_send_data_list = []
+    up_for_send_data_list: list[dict[str, Any]] = []
     webapp_slots = []
     webapp_errors = []
     for index in range(0, 3):

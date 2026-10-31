@@ -22,3 +22,9 @@ A broader dependency refresh is performed only when one of these conditions appl
 - an explicitly approved maintenance window is opened.
 
 The objective is a small, explainable dependency delta rather than continuous upgrade churn.
+
+## Image pins are separate from project metadata
+
+Dependabot's pip entry watches the repository root, which covers `pyproject.toml`. It does not watch `docker/airflow/requirements.txt` or `docker/sender/requirements.lock`. Those files are installed into images and stay on the frozen ecosystem list in `tests/pr_automation_safety_test.py`. Do not add a second pip ecosystem just to surface them.
+
+The Airflow image installs `cryptography==48.0.1` from `docker/airflow/requirements.txt` under the upstream Airflow 3.3.0 constraint file, then installs this project with `--no-deps`. The project pin `cryptography==50.0.1` therefore does not upgrade the image. Aligning the image is an explicit maintenance change with its own compatibility review. It is not done by this documentation note, and it is not a claim that production has already moved.
