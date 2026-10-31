@@ -1,13 +1,6 @@
-> **Host Core-only hardening (2026-09-05):** the old compatibility/rollback
-> description below is superseded by [Architecture](ARCHITECTURE.md) and
-> [ADR 0013](docs/adr/0013-host-core-only-reliable-delivery.md). Production uses
-> PostgreSQL-owned email and a dedicated WeChat worker with durable device
-> idempotency. D1 is an unbound archive, never a runtime fallback. Only an
-> exact-commit production acceptance report establishes deployment completion.
-
 # 🎾 WeChat-on-Airflow
 
-> Shenzhen tennis availability alerts: Apache Airflow 3 performs high-frequency venue polling, a PostgreSQL-backed notification core on the Airflow host owns subscriptions and email, and Cloudflare is reduced to the public edge.
+> Shenzhen tennis availability alerts: Apache Airflow 3 performs high-frequency venue polling, the PostgreSQL notification core on the Airflow host owns subscriptions, email, and WeChat gating, and Cloudflare is only the public edge.
 
 [English](./README.en.md) · [中文](./README.md)
 
@@ -15,17 +8,17 @@
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB)](https://www.python.org/)
 [![Airflow 3.3](https://img.shields.io/badge/Airflow-3.3.0-017CEE)](https://airflow.apache.org/)
 [![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1)](https://www.postgresql.org/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
 ## ✨ Features
 
-- **Multi-venue polling**: 26 Shenzhen venue DAGs. Shenzhen Bay polls every two minutes and Greater Bay Area every three minutes, from 08:00 inclusive to 21:00 exclusive in Asia/Shanghai. Three CRLand accounts rotate independently by each venue's scheduled round; other venues use the one-minute default or an explicit policy exception.
+- **Multi-venue polling**: 27 Shenzhen venue DAGs. Shenzhen Bay polls every two minutes and Greater Bay Area every three minutes, from 08:00 inclusive to 21:00 exclusive in Asia/Shanghai. Three CRLand accounts rotate by each venue's scheduled round. Dashah International and Bao'an Tennis Center share one browser-task slot and poll every two minutes. Other venues use the one-minute default or an explicit policy.
 - **Host-owned subscription core**: local `zacks-api` accepts observations and Web requests; PostgreSQL schema `zacks` stores identities, subscriptions, dedupe state, Outboxes, quotas, and delivery results.
-- **Subscriber email**: `zacks-notification-worker` performs matching, digesting, tier limits, weather policy, Tencent SES submission, retries, and delivery reconciliation.
-- **WeChat alerts**: Airflow continues to call the Android-hosted WeChat Sender directly. The venue gate is read from local PostgreSQL rather than Cloudflare D1.
-- **Stateless Cloudflare edge**: the Worker serves React assets and proxies `/api/*`; D1 is retained read-only only for the rollback window.
-- **Failure isolation**: Cloudflare/D1 failure does not stop existing email or WeChat delivery, and Redis loss cannot lose or duplicate durable notification work.
-- **Exact-commit releases**: GitHub Actions is the only production control plane and verifies the deployed SHA across all affected runtimes.
+- **Subscriber email**: `zacks-notification-worker` performs matching, digesting, weather policy, standard and priority quotas, Tencent SES submission, backoff retries, and delivery reconciliation.
+- **WeChat alerts**: venue tasks only write the PostgreSQL delivery queue. The separate `zacks-wechat-worker` calls the Android Sender. The device keeps a durable idempotency record so a restart does not send the same message again.
+- **Stateless Cloudflare edge**: the Worker serves React assets and proxies `/api/*` with no business state. After migration, D1 has no runtime binding and is kept only as an unbound archive.
+- **Failure isolation**: a Cloudflare or D1 failure does not stop email or WeChat for existing subscriptions. Losing Redis cannot lose or duplicate a notification. A failure in one delivery channel does not overwrite the other.
+- **Exact-commit releases**: GitHub Actions is the only production control plane. Every component is released and accepted by full commit SHA.
 - **Complete quality gate**: `make verify` covers Ruff, mypy, Python tests, Web/Worker tests, browser regression, Compose, images, and Airflow DagBag contracts.
 
 ## 🏗️ Architecture
@@ -43,7 +36,7 @@ flowchart TB
         Worker["zacks-notification-worker"]
         PG[("PostgreSQL 17\nAirflow metadata + zacks schema")]
         Redis[("Redis\nCelery broker / disposable coordination")]
-        WeChatClient["Airflow WeChat client"]
+        WeChatClient["zacks-wechat-worker"]
     end
 
     subgraph Edge["Cloudflare edge"]
@@ -66,7 +59,8 @@ flowchart TB
     API --> PG
     PG --> Worker
     Worker --> SES --> Mail
-    Airflow -->|"local subscription gate"| WeChatClient --> Android --> Group
+    Airflow -->|"local durable WeChat intent"| API
+    PG --> WeChatClient --> Android --> Group
 
     Browser["Mobile or desktop browser"] --> Static
     Browser --> Proxy --> Tunnel --> API
@@ -76,12 +70,14 @@ flowchart TB
 
 1. **PostgreSQL is the only durable business source of truth.** It owns users, subscriptions, venue status, event identities, notification Outboxes, daily limits, and provider status.
 2. **Redis is not authoritative.** It remains the Celery broker and may provide wake-ups or hot cache entries, but notification correctness never depends on Redis persistence.
-3. **Exactly one email owner is active.** Cloudflare remains the legacy owner during migration; the host worker becomes the sole owner only after the atomic cutover.
-4. **WeChat no longer depends on Cloudflare.** Airflow obtains the venue eligibility decision from local PostgreSQL before calling the Android sender.
-5. **Cloudflare is an edge boundary only.** It provides static assets, TLS/WAF, stateless API forwarding, and Tunnel ingress—no D1 query, notification Cron, matching, or email delivery after cutover.
-6. **The migration is reversible.** Shadow services, encrypted secret transfer, initial import, natural dual-write observations, quiescence, final delta import, and automatic rollback are required. D1 is not deleted.
+3. **Exactly one email owner is active.** The first cutover freezes the previous owner, imports and verifies data, then lets the host worker deliver alone. There is no dual-write path and no legacy runtime fallback.
+4. **WeChat does not depend on Cloudflare.** The dedicated WeChat worker decides from PostgreSQL subscriptions and live availability. Venue DAGs do not wait for the device to send.
+5. **Cloudflare is an edge boundary only.** It provides static assets, TLS/WAF, stateless API forwarding, and Tunnel ingress. It does not query D1, run a notification Cron, or own the notification decision.
+6. **After failure, pause safely and roll forward.** The first cutover uses a maintenance window, encrypted secret transfer, batched import, and table-by-table verification. After activation, D1 is not imported again, the old design is not restored automatically, and the original business data is not deleted.
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md), [ADR 0012](./docs/adr/0012-airflow-host-notification-core.md), and the [cutover runbook](./docs/runbooks/host-core-cutover.md).
+Current production state is established only by an exact-commit acceptance report from the protected workflow. This page does not by itself mean the migration is finished. Acceptance includes three natural cycles for all 27 active venue DAGs, the production transaction-rollback subscription probe, and real natural email and WeChat delivery records.
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) and [ADR 0013](./docs/adr/0013-host-core-only-reliable-delivery.md).
 
 ## 🧱 Tech Stack
 
@@ -97,7 +93,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md), [ADR 0012](./docs/adr/0012-airflow-hos
 | React + Cloudflare Worker | Static Web application and stateless edge proxy |
 | Cloudflare Tunnel | Secure public ingress for Airflow and `zacks-api` |
 
-Public endpoints: Airflow console `https://airflow.claude89757.cc` · subscription site `https://zacks.claude89757.cc`
+Public endpoints: Airflow console `https://airflow.claude89757.cc` · subscription site `https://courts.zacks.vision` (`https://zacks.claude89757.cc` remains reachable)
 
 ## 📁 Repository Layout
 
@@ -106,13 +102,13 @@ Public endpoints: Airflow console `https://airflow.claude89757.cc` · subscripti
 ├── pi_host/                           # Raspberry Pi YDMap browser scraper
 ├── src/wechat_airflow/
 │   ├── venues/                        # Venue APIs, parsing, filtering
-│   ├── host_core/                     # PostgreSQL API, matching, migration, email worker
-│   ├── notifications/                 # Observation compatibility and WeChat clients
+│   ├── host_core/                     # PostgreSQL API, matching, migration, email and WeChat workers
+│   ├── notifications/                 # Observation client, WeChat client, booking-link policy
 │   ├── proxy_tools/                   # Proxy refresh
 │   └── maintenance/                   # Android maintenance
 ├── webapp/
 │   ├── src/                           # React client
-│   └── cloudflare/                    # Stateless edge and migration compatibility
+│   └── cloudflare/                    # Stateless edge; D1 is an unbound migration archive
 ├── config/
 │   ├── active-components.yaml
 │   ├── runtime-target.yaml
@@ -135,10 +131,22 @@ make verify
 
 Tests, CI, and normal health checks **never** send real email or WeChat messages.
 
-The local Compose runtime includes PostgreSQL, Redis, all Airflow services,
-`zacks-api`, and `zacks-notification-worker`. The initial production transition
-must use the protected `Production Host Core` workflow; it must not be replaced
-with an ordinary Web deployment.
+The local Compose runtime includes:
+
+```text
+postgresql
+redis
+airflow-api-server
+airflow-scheduler
+airflow-dag-processor
+airflow-worker
+airflow-triggerer
+zacks-api
+zacks-notification-worker
+zacks-wechat-worker
+```
+
+The first production cutover must use the protected `Production Host Core` workflow and the [host-core cutover runbook](./docs/runbooks/host-core-cutover.md). Do not replace it with an ordinary Web deployment.
 
 ## 📖 Documentation
 
@@ -148,7 +156,7 @@ with an ordinary Web deployment.
 | [AGENTS.md](./AGENTS.md) | Repository operating and safety invariants |
 | [config/host-core-contract.yaml](./config/host-core-contract.yaml) | Machine-readable host-core ownership contract |
 | [docs/adr/0012-airflow-host-notification-core.md](./docs/adr/0012-airflow-host-notification-core.md) | Architecture decision and migration principles |
-| [docs/runbooks/host-core-cutover.md](./docs/runbooks/host-core-cutover.md) | Shadow migration, cutover, verification, rollback |
+| [docs/runbooks/host-core-cutover.md](./docs/runbooks/host-core-cutover.md) | Host cutover, acceptance, and roll-forward |
 | [docs/release-strategy.md](./docs/release-strategy.md) | Exact-commit release strategy |
 | [SECURITY.md](./SECURITY.md) | Security policy |
 
@@ -166,4 +174,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md), [SECURITY.md](./SECURITY.md), and [COD
 
 ## 📄 License
 
-Apache License 2.0. See [LICENSE](./LICENSE).
+MIT License. See [LICENSE](./LICENSE).

@@ -10,6 +10,7 @@
 import datetime
 import random
 import time
+from typing import Any, cast
 
 import requests
 import urllib3
@@ -32,7 +33,7 @@ PROXY_CACHE_KEY = "SYSH_PROXY_CACHE"
 API_URL = "https://sysh.tennis168.vip/api/sports/space/date_list"
 
 
-def print_with_timestamp(*args, **kwargs):
+def print_with_timestamp(*args: object, **kwargs: Any) -> None:
     """打印函数带上当前时间戳"""
     timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())
     print(timestamp, *args, **kwargs)
@@ -90,10 +91,12 @@ def merge_time_ranges(data: list[list[str]]) -> list[list[str]]:
     return result
 
 
-def update_proxy_cache(proxy: str, success: bool):
+def update_proxy_cache(proxy: str, success: bool) -> list[str]:
     """更新代理缓存"""
     try:
-        cached_proxies = Variable.get(PROXY_CACHE_KEY, deserialize_json=True, default=[])
+        cached_proxies = cast(
+            list[str], Variable.get(PROXY_CACHE_KEY, deserialize_json=True, default=[])
+        )
     except Exception:
         cached_proxies = []
 
@@ -113,7 +116,7 @@ def update_proxy_cache(proxy: str, success: bool):
     return cached_proxies
 
 
-def get_tennis_court_availability(date: str, proxy_list: list) -> dict[str, list[list[str]]]:
+def get_tennis_court_availability(date: str, proxy_list: list[str]) -> dict[str, list[list[str]]]:
     """
     调用 Tennis168 API 获取场地可用情况
 
@@ -145,7 +148,7 @@ def get_tennis_court_availability(date: str, proxy_list: list) -> dict[str, list
         f"总共尝试代理数量: {len(all_proxies_to_try)} (缓存: {len(cached_proxies)}, 其他: {len(remaining_proxies)})"
     )
 
-    params = {"date": date, "store_id": STORE_ID}
+    params: dict[str, str | int] = {"date": date, "store_id": STORE_ID}
     headers = {
         "Host": "sysh.tennis168.vip",
         "store-id": str(STORE_ID),
@@ -203,7 +206,7 @@ def get_tennis_court_availability(date: str, proxy_list: list) -> dict[str, list
         if json_data.get("data") and json_data["data"].get("children"):
             # 按场地名称收集可用时段
             # API 结构: data.children[] = 时间段列表，每个时间段的 children[] = 场地列表
-            court_availability = {}  # {"1号场": [["06:00", "07:00"], ...]}
+            court_availability: dict[str, list[list[str]]] = {}
 
             for time_slot in json_data["data"]["children"]:
                 # 解析时间段 "6:00~7:00" -> ["06:00", "07:00"]
@@ -239,7 +242,7 @@ def get_tennis_court_availability(date: str, proxy_list: list) -> dict[str, list
         raise Exception("all proxies failed")
 
 
-def run_check_tennis_courts():
+def run_check_tennis_courts() -> None:
     """主要检查逻辑"""
     # 0-8点不巡检
     if datetime.time(0, 0) <= datetime.datetime.now().time() < datetime.time(8, 0):
@@ -263,7 +266,7 @@ def run_check_tennis_courts():
         proxy_list = []
 
     # 查询空闲的球场信息 - 未来6天
-    up_for_send_data_list = []
+    up_for_send_data_list: list[dict[str, Any]] = []
     webapp_slots = []
     webapp_errors = []
     for index in range(0, 6):

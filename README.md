@@ -8,7 +8,7 @@
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB)](https://www.python.org/)
 [![Airflow 3.3](https://img.shields.io/badge/Airflow-3.3.0-017CEE)](https://airflow.apache.org/)
 [![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1)](https://www.postgresql.org/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
 ## ✨ 功能特性
 
@@ -75,7 +75,7 @@ flowchart TB
 5. **Cloudflare 只做边缘。** 静态资源、TLS/WAF、无状态 API 转发和 Tunnel；不查询 D1、不运行通知 Cron、不持有通知决策。
 6. **失败后安全暂停、向前修复。** 首次切换采用业务维护窗口、加密密钥转移、批量导入和逐表核验；激活后不再导入 D1，不自动恢复旧方案，不删除原业务数据。
 
-当前生产状态须以受保护工作流的精确提交验收报告为准，不能仅凭本页判断迁移已完成。验收包括 26 场馆三次自然巡检、生产事务回滚式订阅测试，以及真实自然邮件与微信投递记录。
+当前生产状态须以受保护工作流的精确提交验收报告为准，不能仅凭本页判断迁移已完成。验收包括 27 个活跃场馆 DAG 三次自然巡检、生产事务回滚式订阅测试，以及真实自然邮件与微信投递记录。
 
 更多细节见 [ARCHITECTURE.md](./ARCHITECTURE.md) 和 [ADR 0013](./docs/adr/0013-host-core-only-reliable-delivery.md)。
 
@@ -93,7 +93,7 @@ flowchart TB
 | React + Cloudflare Worker | 静态 Web 与无状态边缘代理 |
 | Cloudflare Tunnel | Airflow 与 `zacks-api` 的安全公网入口 |
 
-在线服务：Airflow 控制台 `https://airflow.claude89757.cc` · 订阅站点 `https://zacks.claude89757.cc`
+在线服务：Airflow 控制台 `https://airflow.claude89757.cc` · 订阅站点 `https://courts.zacks.vision`（`https://zacks.claude89757.cc` 仍可访问）
 
 ## 📁 项目结构
 
@@ -102,13 +102,13 @@ flowchart TB
 ├── pi_host/                           # 树莓派 YDMap 浏览器采集服务
 ├── src/wechat_airflow/
 │   ├── venues/                        # 场地 API、解析与过滤
-│   ├── host_core/                     # PostgreSQL API、匹配、迁移、邮件 Worker
+│   ├── host_core/                     # PostgreSQL API、匹配、迁移、邮件与微信 Worker
 │   ├── notifications/                 # 观测兼容客户端、微信与预订卡片策略
 │   ├── proxy_tools/                   # 代理刷新
 │   └── maintenance/                   # Android 设备维护
 ├── webapp/
 │   ├── src/                           # React 客户端
-│   └── cloudflare/                    # 无状态边缘和迁移期兼容代码
+│   └── cloudflare/                    # 无状态边缘；D1 仅作未绑定迁移存档
 ├── config/
 │   ├── active-components.yaml         # 活跃 DAG/组件契约
 │   ├── runtime-target.yaml            # 运行时与部署目标
@@ -157,7 +157,7 @@ zacks-wechat-worker
 | [AGENTS.md](./AGENTS.md) | 仓库操作与安全不变量 |
 | [config/host-core-contract.yaml](./config/host-core-contract.yaml) | 主机通知核心机器可读契约 |
 | [docs/adr/0012-airflow-host-notification-core.md](./docs/adr/0012-airflow-host-notification-core.md) | 架构决策与迁移原则 |
-| [docs/runbooks/host-core-cutover.md](./docs/runbooks/host-core-cutover.md) | 影子迁移、切换、验收和回滚 |
+| [docs/runbooks/host-core-cutover.md](./docs/runbooks/host-core-cutover.md) | 主机切换、验收与向前修复 |
 | [docs/release-strategy.md](./docs/release-strategy.md) | 精确提交发布策略 |
 | [SECURITY.md](./SECURITY.md) | 安全策略 |
 
@@ -176,4 +176,4 @@ zacks-wechat-worker
 
 ## 📄 License
 
-Apache License 2.0。见 [LICENSE](./LICENSE)。
+MIT License。见 [LICENSE](./LICENSE)。

@@ -50,9 +50,8 @@ from the last verified state; chat history is not authoritative.
 
 Do not add test DAGs, demos, generated files, or archived source under `dags/`.
 DAG files must stay below the manifest checker's wiring-only limit and must not
-import network clients directly. The exact mypy exclusions in `pyproject.toml`
-are a bounded legacy backlog; do not broaden them, and remove an exclusion when
-the corresponding adapter is made fully typed.
+import network clients directly. Production adapters stay under strict mypy.
+`airflow.*` may ignore missing imports; do not broaden that override.
 
 ## Business Invariants
 
@@ -225,7 +224,7 @@ Venue tasks enqueue WeChat intents; only `zacks-wechat-worker` calls the durable
 device Sender. Email and WeChat uncertain submission states are never blindly
 replayed. All production operations remain protected GitHub workflows.
 
-Acceptance requires the exact commit on host, edge and Sender; 26 venue DAGs
+Acceptance requires the exact commit on host, edge and Sender; 27 venue DAGs
 with three natural successful cycles; fresh observations and consumers; migration
 identity reconciliation; the production transaction-rollback API probe; and
 actual natural SES-delivered and WeChat-sent records. The rollback probe is not

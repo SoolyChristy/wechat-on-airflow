@@ -12,7 +12,7 @@ import hashlib
 import json
 import random
 import time
-from typing import Any
+from typing import Any, cast
 
 import requests
 from airflow.sdk import Variable
@@ -73,7 +73,7 @@ def set_md5(timestamp: int, content: str | None = None) -> str:
 def generate_sign(
     method: str,
     url: str,
-    data: dict[str, Any] | None = None,
+    data: Any = None,
     params: dict[str, Any] | None = None,
     timestamp: int | None = None,
 ) -> tuple[str, int]:
@@ -141,13 +141,13 @@ def generate_sign(
 
 
 class TennisCourtAPI:
-    def __init__(self):
+    def __init__(self) -> None:
         self.base_url = "https://sports.sztyzx.com.cn"
         self.session = requests.Session()
-        self.proxies = None
+        self.proxies: dict[str, str] | None = None
 
         # 设置默认headers（基于成功的curl请求）
-        self.default_headers = {
+        self.default_headers: dict[str, str] = {
             "Host": "sports.sztyzx.com.cn",
             "xweb_xhr": "1",
             "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Mac MacWechat/WMPF MacWechat/3.8.7(0x13080712) UnifiedPCMacWechat(0xf2640518) XWEB/13910",
@@ -161,11 +161,13 @@ class TennisCourtAPI:
             "priority": "u=1, i",
         }
 
-    def set_proxy(self, proxies):
+    def set_proxy(self, proxies: dict[str, str] | None) -> None:
         """设置代理"""
         self.proxies = proxies
 
-    def _make_request(self, method, endpoint, data=None, **kwargs):
+    def _make_request(
+        self, method: str, endpoint: str, data: Any = None, **kwargs: Any
+    ) -> requests.Response:
         """
         发送HTTP请求的核心方法
         关键改进：使用原始JSON字符串，不使用requests的json参数
@@ -213,7 +215,14 @@ class TennisCourtAPI:
             print(f"❌ 请求异常: {e}")
             raise
 
-    def get_court_schedule(self, stadium_id, sports_cat_id, ground_type_id, use_date, **kwargs):
+    def get_court_schedule(
+        self,
+        stadium_id: str,
+        sports_cat_id: int,
+        ground_type_id: int,
+        use_date: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         """
         查询网球场时间安排
 
@@ -249,8 +258,7 @@ class TennisCourtAPI:
 
         if response.status_code == 200:
             try:
-                result = response.json()
-                return result
+                return cast(dict[str, Any], response.json())
             except json.JSONDecodeError:
                 return {"error": "响应不是有效的JSON", "raw": response.text}
         else:
@@ -308,23 +316,26 @@ def merge_time_ranges(data: list[list[str]]) -> list[list[str]]:
 
     data_in_minutes = sorted(data_in_minutes)
 
-    merged_data = []
-    start, end = data_in_minutes[0]
+    merged_minutes: list[tuple[int, int]] = []
+    range_start, range_end = data_in_minutes[0]
     for i in range(1, len(data_in_minutes)):
         next_start, next_end = data_in_minutes[i]
-        if next_start <= end:
-            end = max(end, next_end)
+        if next_start <= range_end:
+            range_end = max(range_end, next_end)
         else:
-            merged_data.append((start, end))
-            start, end = next_start, next_end
-    merged_data.append((start, end))
+            merged_minutes.append((range_start, range_end))
+            range_start, range_end = next_start, next_end
+    merged_minutes.append((range_start, range_end))
 
-    result = [[minutes_to_time_str(start), minutes_to_time_str(end)] for start, end in merged_data]
+    result = [
+        [minutes_to_time_str(start_minutes), minutes_to_time_str(end_minutes)]
+        for start_minutes, end_minutes in merged_minutes
+    ]
     print(f"合并后: {result}")
     return result
 
 
-def parse_tyzx_court_data(court_data: dict) -> dict:
+def parse_tyzx_court_data(court_data: dict[str, Any]) -> dict[str, list[list[str]]]:
     """
     解析深圳市体育中心的场地数据
 
@@ -341,12 +352,12 @@ def parse_tyzx_court_data(court_data: dict) -> dict:
     print(f"📊 API返回了 {len(court_data['body'])} 个时段数据")
 
     # 统计所有场地和时段信息
-    all_courts_info = {}
+    all_courts_info: dict[str, Any] = {}
     available_count = 0
     unavailable_count = 0
 
     # 按场地名称分组
-    courts_by_name = {}
+    courts_by_name: dict[str, list[list[str]]] = {}
     for slot in court_data["body"]:
         place_name = slot.get("placeName", "未知场地")
         # 处理时间格式，确保统一性
@@ -354,15 +365,15 @@ def parse_tyzx_court_data(court_data: dict) -> dict:
         raw_end_time = slot.get("endTime", "")
 
         # 标准化时间格式：从 "07:00:00" 或 "07:00" 格式提取小时
-        def extract_hour(time_str):
+        def extract_hour(time_str: str) -> str:
             if not time_str:
                 return ""
             # 分割时间字符串，取第一部分（小时）
             hour_part = time_str.split(":")[0] if ":" in time_str else time_str
             return hour_part.zfill(2)  # 确保两位数格式
 
-        start_time = extract_hour(raw_start_time)
-        end_time = extract_hour(raw_end_time)
+        start_time = extract_hour(cast(str, raw_start_time))
+        end_time = extract_hour(cast(str, raw_end_time))
 
         appoint_flag = slot.get("appointFlag", 0)
         price_info = slot.get("priceInfoList", [])
@@ -457,11 +468,11 @@ def parse_tyzx_court_data(court_data: dict) -> dict:
     return available_slots_infos
 
 
-def get_cached_successful_proxies():
+def get_cached_successful_proxies() -> list[str]:
     """获取缓存的成功代理列表"""
     cache_key = "TYZX_SUCCESSFUL_PROXIES_CACHE"
     try:
-        cached_proxies = Variable.get(cache_key, deserialize_json=True, default=[])
+        cached_proxies = cast(list[str], Variable.get(cache_key, deserialize_json=True, default=[]))
         print(f"📋 从缓存中获取到 {len(cached_proxies)} 个成功代理")
         if cached_proxies:
             print(f"   示例代理: {cached_proxies[:3]}")
@@ -471,11 +482,11 @@ def get_cached_successful_proxies():
         return []
 
 
-def update_successful_proxy_cache(successful_proxy):
+def update_successful_proxy_cache(successful_proxy: str) -> None:
     """将成功的代理添加到缓存中"""
     cache_key = "TYZX_SUCCESSFUL_PROXIES_CACHE"
     try:
-        cached_proxies = Variable.get(cache_key, deserialize_json=True, default=[])
+        cached_proxies = cast(list[str], Variable.get(cache_key, deserialize_json=True, default=[]))
 
         # 如果代理已存在，先移除（为了更新顺序）
         if successful_proxy in cached_proxies:
@@ -494,11 +505,11 @@ def update_successful_proxy_cache(successful_proxy):
         print(f"❌ 更新代理缓存失败: {e}")
 
 
-def remove_failed_proxy_from_cache(failed_proxy):
+def remove_failed_proxy_from_cache(failed_proxy: str) -> None:
     """从缓存中移除失败的代理"""
     cache_key = "TYZX_SUCCESSFUL_PROXIES_CACHE"
     try:
-        cached_proxies = Variable.get(cache_key, deserialize_json=True, default=[])
+        cached_proxies = cast(list[str], Variable.get(cache_key, deserialize_json=True, default=[]))
 
         if failed_proxy in cached_proxies:
             cached_proxies.remove(failed_proxy)
@@ -509,7 +520,9 @@ def remove_failed_proxy_from_cache(failed_proxy):
         print(f"❌ 移除失败代理缓存失败: {e}")
 
 
-def get_free_tennis_court_infos_for_tyzx(date: str, proxy_list: list) -> dict:
+def get_free_tennis_court_infos_for_tyzx(
+    date: str, proxy_list: list[str]
+) -> dict[str, list[list[str]]]:
     """从深圳市体育中心获取可预订的场地信息"""
     print(f"🌐 开始查询 {date} 的场地信息，共有 {len(proxy_list)} 个代理可用")
 
@@ -590,7 +603,7 @@ def get_free_tennis_court_infos_for_tyzx(date: str, proxy_list: list) -> dict:
         raise Exception("所有代理都失败了")
 
 
-def get_proxy_list():
+def get_proxy_list() -> list[str]:
     """获取代理列表（包含缓存的代理和新获取的代理）"""
     # 首先获取缓存的成功代理
     cached_proxies = get_cached_successful_proxies()
@@ -723,7 +736,7 @@ def filter_court_data_for_notification(
     return up_for_send_data_list
 
 
-def run_check_tennis_courts():
+def run_check_tennis_courts() -> None:
     """主要检查逻辑"""
     if datetime.time(0, 0) <= datetime.datetime.now().time() < datetime.time(8, 0):
         print("每天0点-8点不巡检")
@@ -736,7 +749,7 @@ def run_check_tennis_courts():
     proxy_list = get_proxy_list()
 
     # 查询空闲的球场信息
-    up_for_send_data_list = []
+    up_for_send_data_list: list[dict[str, Any]] = []
     webapp_slots = []
     webapp_errors = []
 

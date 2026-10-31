@@ -13,6 +13,7 @@ import random
 import threading
 import warnings
 from datetime import datetime
+from typing import Any, cast
 
 # 第三方库导入
 import requests
@@ -32,7 +33,7 @@ SOURCE_TIMEOUT_SECONDS = 15
 GITHUB_TIMEOUT_SECONDS = 15
 
 
-def generate_proxies():
+def generate_proxies() -> tuple[list[str], dict[str, str]]:
     """
     获取待检查的代理列表
     """
@@ -63,7 +64,7 @@ def generate_proxies():
     return proxies, proxy_url_infos
 
 
-def is_valid_proxy(proxy):
+def is_valid_proxy(proxy: str) -> bool:
     # 简单的 IP 格式验证
     parts = proxy.split(":")
     if len(parts) != 2:
@@ -72,7 +73,7 @@ def is_valid_proxy(proxy):
     return ip.count(".") == 3 and port.isdigit()
 
 
-def check_proxy(proxy_url, proxy_url_infos):
+def check_proxy(proxy_url: str, proxy_url_infos: dict[str, str]) -> bool:
     """
     使用 requests 检查代理是否可用
     """
@@ -119,7 +120,7 @@ def check_proxy(proxy_url, proxy_url_infos):
     return False
 
 
-def update_proxy_file(filename, available_proxies):
+def update_proxy_file(filename: str, available_proxies: list[str]) -> None:
     """
     更新代理文件，保留最近的100个可用代理
     """
@@ -152,7 +153,7 @@ def update_proxy_file(filename, available_proxies):
     print(f"代理文件已更新，共有 {len(all_proxies)} 个可用代理")
 
 
-def task_check_proxies():
+def task_check_proxies() -> None:
     """
     主要检查代理的任务函数，使用并发提高效率
     """
@@ -162,10 +163,10 @@ def task_check_proxies():
     proxies, proxy_url_infos = generate_proxies()
     print(f"开始检查 {len(proxies)} 个代理...")
 
-    available_proxies = []
+    available_proxies: list[str] = []
     max_workers = 50  # 增加并发线程数，提高效率
 
-    def check_and_process(proxy):
+    def check_and_process(proxy: str) -> None:
         if check_proxy(proxy, proxy_url_infos):
             with threading.Lock():  # 使用锁防止并发写入问题
                 available_proxies.append(proxy)
@@ -191,8 +192,9 @@ def task_check_proxies():
     upload_file_to_github(LOCAL_FILENAME)
 
     # 更新到airflow的变量中
-    isz_successful_proxies = Variable.get(
-        "ISZ_SUCCESSFUL_PROXIES", deserialize_json=True, default=[]
+    isz_successful_proxies = cast(
+        list[Any],
+        Variable.get("ISZ_SUCCESSFUL_PROXIES", deserialize_json=True, default=[]),
     )
     for proxy in available_proxies:
         if proxy not in isz_successful_proxies:
@@ -206,7 +208,7 @@ def task_check_proxies():
     Variable.delete("ISZ_SUCCESSFUL_PROXIES")
 
 
-def upload_file_to_github(filename):
+def upload_file_to_github(filename: str) -> None:
     """
     将代理文件上传到GitHub
     """
@@ -247,7 +249,7 @@ def upload_file_to_github(filename):
         print(f"上传文件时出错: {e}")
 
 
-def download_file():
+def download_file() -> None:
     """
     从GitHub下载代理文件，确保不覆盖现有代理
     """
@@ -309,13 +311,13 @@ def download_file():
             pass
 
 
-def get_file_sha(url, headers):
+def get_file_sha(url: str, headers: dict[str, str]) -> str | None:
     """
     获取GitHub上文件的SHA，用于更新文件
     """
     response = requests.get(url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     if response.status_code == 200:
-        return response.json()["sha"]
+        return cast(str, response.json()["sha"])
     elif response.status_code == 404:
         print("文件在GitHub上不存在，将创建新文件")
         return None

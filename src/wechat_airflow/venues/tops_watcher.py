@@ -10,6 +10,7 @@
 import datetime
 import random
 import time
+from typing import Any, cast
 
 import requests
 import urllib3
@@ -37,7 +38,7 @@ PROXY_LIST_URL = (
 )
 
 
-def print_with_timestamp(*args, **kwargs):
+def print_with_timestamp(*args: object, **kwargs: Any) -> None:
     """打印函数带上当前时间戳"""
     timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())
     print(timestamp, *args, **kwargs)
@@ -111,24 +112,25 @@ def parse_tops_slot_time(begin_datetime: str, end_datetime: str) -> list[str]:
     return [normalize_time(start_time), normalize_time(end_time)]
 
 
-def parse_tops_availability(json_data: dict) -> dict[str, list[list[str]]]:
+def parse_tops_availability(json_data: object) -> dict[str, list[list[str]]]:
     """
     解析 TOPS API 响应，返回按场地分组且合并后的可预约时段。
 
     Returns:
         {"风雨棚1号场": [["18:00", "20:00"], ...], ...}
     """
-    court_availability = {}
+    court_availability: dict[str, list[list[str]]] = {}
 
     for slot in directly_bookable_slots(json_data):
-        court_name = slot.get("classRoomName") or "未知场地"
+        raw_name = slot.get("classRoomName")
+        court_name = cast(str, raw_name) if raw_name else "未知场地"
         begin_datetime = slot.get("beginDatetime")
         end_datetime = slot.get("endDatetime")
         if not begin_datetime or not end_datetime:
             continue
 
         try:
-            slot_time = parse_tops_slot_time(begin_datetime, end_datetime)
+            slot_time = parse_tops_slot_time(cast(str, begin_datetime), cast(str, end_datetime))
         except Exception as error:
             print(f"解析 TOPS 时段失败: {slot}, 错误: {error}")
             continue
@@ -137,7 +139,7 @@ def parse_tops_availability(json_data: dict) -> dict[str, list[list[str]]]:
             court_availability[court_name] = []
         court_availability[court_name].append(slot_time)
 
-    available_slots_infos = {}
+    available_slots_infos: dict[str, list[list[str]]] = {}
     for court_name in court_availability:
         available_slots_infos[court_name] = merge_time_ranges(court_availability[court_name])
 
@@ -161,9 +163,9 @@ def parse_end_time_for_overlap(end_time: str) -> datetime.datetime:
 
 def filter_court_data_for_notification(
     input_date: str, court_data: dict[str, list[list[str]]]
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """按 SYSH 的时间窗口筛选需要通知的 TOPS 空场。"""
-    up_for_send_data_list = []
+    up_for_send_data_list: list[dict[str, Any]] = []
     inform_date = datetime.datetime.strptime(input_date, "%Y-%m-%d").strftime("%m-%d")
     check_date = datetime.datetime.strptime(input_date, "%Y-%m-%d")
     is_weekend = check_date.weekday() >= 5
@@ -209,9 +211,9 @@ def filter_court_data_for_notification(
 
 
 def build_new_notifications(
-    up_for_send_data_list: list[dict],
+    up_for_send_data_list: list[dict[str, Any]],
     sended_msg_list: list[str],
-    current_year: int = None,
+    current_year: int | None = None,
 ) -> list[str]:
     """根据已发送缓存构造本轮新增微信通知。"""
     if current_year is None:
@@ -238,10 +240,12 @@ def build_new_notifications(
     return up_for_send_msg_list
 
 
-def update_proxy_cache(proxy: str, success: bool):
+def update_proxy_cache(proxy: str, success: bool) -> list[str]:
     """更新 TOPS 独立代理缓存"""
     try:
-        cached_proxies = Variable.get(PROXY_CACHE_KEY, deserialize_json=True, default=[])
+        cached_proxies = cast(
+            list[str], Variable.get(PROXY_CACHE_KEY, deserialize_json=True, default=[])
+        )
     except Exception:
         cached_proxies = []
 
@@ -261,7 +265,7 @@ def update_proxy_cache(proxy: str, success: bool):
     return cached_proxies
 
 
-def get_tennis_court_availability(date: str, proxy_list: list) -> dict[str, list[list[str]]]:
+def get_tennis_court_availability(date: str, proxy_list: list[str]) -> dict[str, list[list[str]]]:
     """
     调用 TOPS API 获取场地可用情况。
 
@@ -348,7 +352,7 @@ def get_tennis_court_availability(date: str, proxy_list: list) -> dict[str, list
         raise Exception("all proxies failed")
 
 
-def load_proxy_list() -> list:
+def load_proxy_list() -> list[str]:
     """读取和 SYSH 一样的外部代理列表。"""
     try:
         response = requests.get(PROXY_LIST_URL, timeout=10, verify=False)
@@ -362,7 +366,7 @@ def load_proxy_list() -> list:
         return []
 
 
-def print_court_data(input_date: str, court_data: dict[str, list[list[str]]]):
+def print_court_data(input_date: str, court_data: dict[str, list[list[str]]]) -> None:
     """打印网球场可预订场地详细信息。"""
     print_with_timestamp(f"=== {input_date} 可预订场地详细信息 ===")
     if court_data:
@@ -383,7 +387,7 @@ def print_court_data(input_date: str, court_data: dict[str, list[list[str]]]):
     print_with_timestamp("=" * 50)
 
 
-def enqueue_wechat_message(all_in_one_msg: str):
+def enqueue_wechat_message(all_in_one_msg: str) -> object:
     """通过 best-effort 旁路发送微信消息。"""
     chat_names = Variable.get("SZ_TENNIS_CHATROOMS", default="")
     chat_names_list = str(chat_names).splitlines()
@@ -396,7 +400,7 @@ def enqueue_wechat_message(all_in_one_msg: str):
     )
 
 
-def run_check_tennis_courts():
+def run_check_tennis_courts() -> None:
     """主要检查逻辑"""
     # 0-8点不巡检
     if datetime.time(0, 0) <= datetime.datetime.now().time() < datetime.time(8, 0):
@@ -411,7 +415,7 @@ def run_check_tennis_courts():
     proxy_list = load_proxy_list()
 
     # 查询空闲的球场信息 - 未来3天
-    up_for_send_data_list = []
+    up_for_send_data_list: list[dict[str, Any]] = []
     webapp_slots = []
     webapp_errors = []
     for index in range(0, 3):

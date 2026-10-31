@@ -15,6 +15,7 @@ import re
 import ssl
 import time
 from dataclasses import dataclass
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import requests
@@ -139,9 +140,11 @@ class CrlandLegacyTlsAdapter(HTTPAdapter):
         self.ssl_context.options |= SSL_OP_LEGACY_SERVER_CONNECT
         super().__init__()
 
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+    def init_poolmanager(
+        self, connections: int, maxsize: int, block: bool = False, **pool_kwargs: Any
+    ) -> None:
         pool_kwargs["ssl_context"] = self.ssl_context
-        return super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
 
 
 def create_crland_http_session() -> requests.Session:
@@ -150,13 +153,15 @@ def create_crland_http_session() -> requests.Session:
     return session
 
 
-def print_with_timestamp(*args, **kwargs):
+def print_with_timestamp(*args: object, **kwargs: Any) -> None:
     """打印函数带上当前时间戳"""
     timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())
     print(timestamp, *args, **kwargs)
 
 
-def find_available_slots(booked_slots: list[list[str]], time_range: dict) -> list[list[str]]:
+def find_available_slots(
+    booked_slots: list[list[str]], time_range: dict[str, str]
+) -> list[list[str]]:
     """查找可用的时间段"""
     if not booked_slots:
         return [[time_range["start_time"], time_range["end_time"]]]
@@ -303,10 +308,11 @@ def validate_szw_authorization_pool(
                 str(error).replace("SZW_API_AUTHORIZATION", "SZW_API_AUTHORIZATIONS")
             ) from None
         payload = _decode_szw_jwt_segment(authorization.split(".")[1])
+        claims = cast(dict[str, object], payload)
         identifiers = {
             claim.strip()
             for key in ("sub", "openid")
-            if isinstance(claim := payload.get(key), str) and claim.strip()
+            if isinstance(claim := claims.get(key), str) and claim.strip()
         }
         if not identifiers:
             raise ValueError("Airflow Variable SZW_API_AUTHORIZATIONS 缺少账号标识")
@@ -378,14 +384,14 @@ def select_crland_authorization(
 
 def get_free_tennis_court_infos_for_szw(
     date: str,
-    proxy_list: list,
-    time_range: dict,
+    proxy_list: list[str],
+    time_range: dict[str, str],
     *,
     project_uuid: str = SZW_PROJECT_UUID,
     field_area_uuid: str = SZW_FIELD_AREA_UUID,
     court_name_prefix: str = "",
     authorization: str | None = None,
-) -> dict:
+) -> dict[str, list[list[str]]]:
     """
     获取可预订的场地信息
     Args:
@@ -449,7 +455,7 @@ def get_free_tennis_court_infos_for_szw(
                 retryable = False
                 try:
                     print(f"data: {payload}")
-                    response = session.post(SZW_MATRIX_API_URL, **request_kwargs)
+                    response = session.post(SZW_MATRIX_API_URL, **cast(Any, request_kwargs))
                     print(f"response status_code: {response.status_code}")
                     if response.status_code == 200:
                         try:
@@ -498,7 +504,7 @@ def get_free_tennis_court_infos_for_szw(
         }
         print(venue_name_infos)
 
-        booked_court_infos = {}
+        booked_court_infos: dict[str, list[list[str]]] = {}
 
         for venue_info in result.get("matrix", []):
             venue_name = venue_name_infos.get(venue_info.get("fieldUuid"))
@@ -516,7 +522,7 @@ def get_free_tennis_court_infos_for_szw(
                     continue
                 booked_court_infos[venue_name].append([start_time, end_time])
 
-        available_slots_infos = {}
+        available_slots_infos: dict[str, list[list[str]]] = {}
         for venue_name, booked_slots in booked_court_infos.items():
             available_slots = find_available_slots(booked_slots, time_range)
             if available_slots:
@@ -532,7 +538,7 @@ def check_and_notify_for_day(
     *,
     data_interval_end: datetime.datetime | str | None = None,
     logical_date: datetime.datetime | str | None = None,
-):
+) -> None:
     """检查指定天数后的网球场可用情况并发送通知
 
     Args:
@@ -554,7 +560,7 @@ def check_and_notify_for_day(
     print_with_timestamp(f"Checking tennis courts for {input_date}...")
 
     # 使用可用代理查询空闲的球场信息
-    up_for_send_data_list = []
+    up_for_send_data_list: list[dict[str, Any]] = []
     webapp_slots = []
     webapp_error = None
     booking_error = None
@@ -566,7 +572,7 @@ def check_and_notify_for_day(
             now=run_start_time,
             log_selection=True,
         )
-        court_data = {}
+        court_data: dict[str, list[list[str]]] = {}
         for booking_area in venue.booking_areas:
             area_data = get_free_tennis_court_infos_for_szw(
                 input_date,
