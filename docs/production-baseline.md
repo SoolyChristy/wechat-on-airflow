@@ -1,5 +1,749 @@
 # Production Baseline
 
+## All configured WeChat routes restored by owner request on 2026-11-01
+
+PR #253 deliberately paused shared groups by filtering every recipient found in
+`SZ_TENNIS_CHATROOMS`. The earlier service recovery retained this routing rule,
+so it did not restore shared-group venue messages. The owner has now explicitly
+requested all originally configured groups. The central pause filter is removed;
+diagnostics and the separately approved real-send probe reflect active shared
+and sports-center recipients. The free-court watcher remains isolated to its
+dedicated group. Baoan retirement, subscription eligibility, current-availability
+validation, expiration and durable deduplication are unchanged. No historical
+queue replay or synthetic notification is part of this repair.
+
+[PR #309](https://github.com/claude89757/wechat-on-airflow/pull/309) deployed
+Airflow producer commit `4d356d3d932171045bde38969e5a8d262dc281f2` through
+[protected recovery 41311773337](https://github.com/claude89757/wechat-on-airflow/actions/runs/41311773337),
+after exact-SHA CI and read-only preflight. Host Core, Sender, edge and Pi remain
+on `7fb7c720e98b1c78300b671fd5b3b99cc4c2eaab`; no consumer/Sender contract
+changed and their matching identities were retained.
+
+[Post-deploy routing diagnosis](https://github.com/claude89757/wechat-on-airflow/actions/runs/41312231260)
+confirmed general targets 2, sports-center memberships 3, dedicated free-court
+targets 1 and paused shared targets 0. These are route membership counts, not
+distinct group totals. [Read-only delivery evidence](https://github.com/claude89757/wechat-on-airflow/actions/runs/41312316669)
+at `2026-11-01T13:40:00.514130Z` showed natural WeChat sends rising from 4 to 10
+in the 24-hour window: six additional sends after deployment. It does not prove
+a separate receipt for every group. Both delivery gates remained enabled and
+all 30 active stored observation scopes were fresh and healthy.
+
+The deployment post-check retained `observation_pending=true` for interrupted
+DAG history; runtime readiness and exact Airflow identity passed. The separate
+[device inventory](https://github.com/claude89757/wechat-on-airflow/actions/runs/41312135528)
+confirmed the API, Sender, pinned tunnel and scraper healthy but its overall
+result failed on pending natural cycles and a legacy unfiltered unhealthy-venue
+count that includes retired Baoan. This is not full all-cycle acceptance. No
+synthetic notification, historical replay or deduplication reset was performed.
+
+## Notification recovery and Baoan retirement deployed on 2026-11-01
+
+The current business runtime is
+`7fb7c720e98b1c78300b671fd5b3b99cc4c2eaab`: Host Core, public edge,
+Airflow, Sender and Pi YDMap scraper. This supersedes the pending-deployment
+status below; independent operations MCP runtimes have separate identities.
+
+WeChat remained disabled after the earlier email-only recovery. Recovery also
+incorrectly required one scheduler container, although production intentionally
+runs two. PR #305 validates both scheduler replicas while retaining single-owner
+consumer checks. The stale Pi scraper lacked the current protocol metadata;
+updating it completed Baoan retirement and restored Dashah source health.
+
+Protected evidence:
+
+- [Host Core recovery](https://github.com/claude89757/wechat-on-airflow/actions/runs/41278874821)
+  and [Sender apply](https://github.com/claude89757/wechat-on-airflow/actions/runs/41279133608).
+- [Interrupted Airflow recovery](https://github.com/claude89757/wechat-on-airflow/actions/runs/41280037988)
+  deployed the target successfully; its old post-check failed only on interrupted
+  historical runs, not service identity or readiness.
+- [Worker activation](https://github.com/claude89757/wechat-on-airflow/actions/runs/41280345326)
+  enabled WeChat at `2026-11-01T06:20:42.457388Z`.
+- [Pi apply](https://github.com/claude89757/wechat-on-airflow/actions/runs/41281102003),
+  [independent health](https://github.com/claude89757/wechat-on-airflow/actions/runs/41281163599)
+  and [live source inspection](https://github.com/claude89757/wechat-on-airflow/actions/runs/41281212494)
+  passed. Protocol 2 advertises only `dsh`, with the exact runtime commit.
+- [Business health](https://github.com/claude89757/wechat-on-airflow/actions/runs/41281137965)
+  passed all checks at `2026-11-01T06:31:24.984550Z`: 26 active venues,
+  natural DAG cycles, observation scopes, consumer heartbeats, delivery gates,
+  Sender readiness, queue health and exact identities. Baoan remains one retired
+  historical venue; PICKLE POP Baoan remains active.
+
+The recovery window recorded 25 naturally delivered emails and zero new WeChat
+sent records. Infrastructure health is verified; a new natural WeChat receipt
+is still required for end-to-end delivery acceptance. No synthetic notifications
+were sent and historical uncertain deliveries were not replayed.
+
+PR #306 reduced PR checks to about 10 seconds and the observed scoped main
+verification to 92 seconds. Updates may interrupt active inspections, as the
+owner explicitly authorized. Recent interrupted-run history no longer makes a
+healthy deployment fail; standalone business health remains strict. PR #307
+allows exact deployed-ancestor health checks without redeployment after a
+documentation or CI-only merge. Authentication, exact-SHA release gates,
+single-owner delivery and deduplication remain enforced.
+
+## Owner-approved Baoan withdrawal prepared on 2026-11-01; deployment pending
+
+The owner requested restoration of both email and WeChat and withdrawal of the
+previous day's Baoan integration. The actual merged feature was
+[PR #263](https://github.com/claude89757/wechat-on-airflow/pull/263),
+`f9fc735128262737e827b49b0368ca73ad02fb59`, merged at
+`2026-10-31T05:59:00Z`; contributor PR #262 was closed without merging.
+The targeted withdrawal removes `baoti` from the active DAG, API and public
+subscription catalog and records its explicit retirement. The other 26 venue
+identities and polling schedules remain unchanged, including the distinct
+PICKLE POP Baoan venue (`ppba`).
+
+Historical Baoan subscriptions, observations, outboxes, deduplication state and
+Airflow run records are retained. Active venue health excludes only this
+approved retired venue; unknown catalog drift still fails. The durable seed
+catalog and schema fingerprint remain identical to the existing Host Core
+runtime, so this change does not introduce database DDL or replay a migration.
+Existing email/WeChat records for a retired venue cannot be newly dispatched.
+Independent OAuth/MCP, notification recovery, and shared collector safety fixes
+are retained. Group routing is unchanged.
+
+This section records the approved implementation scope, not a successful
+production rollback or restored WeChat delivery. Exact-commit protected
+preflight/apply, component identity checks, all 26 venues' required natural
+cycles and real natural delivery receipts remain outstanding. The following
+email-only recovery evidence remains historical and is not full acceptance.
+
+## Email consumer resumed; natural delivery verification pending on 2026-11-01
+
+The failed [0.9.0 ship 41205840288](https://github.com/claude89757/wechat-on-airflow/actions/runs/41205840288)
+had upgraded Host Core before Pi apply failed and the protected safety stop
+paused delivery. Existing venue observations continued while the email
+consumer remained stopped. This established a paused notification runtime;
+no SES provider outage was established.
+
+[PR #297](https://github.com/claude89757/wechat-on-airflow/pull/297) added the
+protected email-only recovery procedure. The operations commit was
+`2e4dbe6376e3a310db77064818652de72e0c9211`, with
+[exact-commit CI 41266646251](https://github.com/claude89757/wechat-on-airflow/actions/runs/41266646251).
+The existing Host Core and email runtime remained
+`bd8ee98381cca5f0a4c8d0a674590012d76adc57`. Recovery preserved existing
+container and image identities; it did not deploy another application or edge
+runtime.
+
+[Protected recovery 41267040437](https://github.com/claude89757/wechat-on-airflow/actions/runs/41267040437)
+started only the existing email container, verified a new heartbeat while
+delivery was still paused, and enabled its PostgreSQL delivery fence at
+`2026-11-01T02:55:08.601801+00:00` (10:55:08 Asia/Shanghai).
+The [independent post-resume status](https://github.com/claude89757/wechat-on-airflow/actions/runs/41267040437/job/124731907761)
+at `2026-11-01T02:56:10.667338+00:00` confirmed `deliveryEnabled=true`,
+`phase=active`, and an active-owner consumer heartbeat at
+`2026-11-01T02:55:55.767075+00:00`. There were 26 fresh healthy venue
+observations; Baoan (`baoti`) remained unhealthy.
+
+The 190 old pending subscription reminders expired through the worker's normal
+expiry policy. Historical expired records increased from 194 to 384, and
+`oldActiveBacklog` reached zero. No administrative queue clearing, deduplication
+reset or manual replay occurred.
+
+[Read-only email status 41267649427](https://github.com/claude89757/wechat-on-airflow/actions/runs/41267649427/job/124733724680)
+at `2026-11-01T03:04:23.495214Z`, 9 minutes 14 seconds after recovery, confirmed
+the consumer remained healthy and active, with an owner heartbeat at
+`2026-11-01T03:04:00.526537Z`. `deliveryEnabled=true`, `phase=active`, and the
+control timestamp was unchanged at `2026-11-01T02:55:08.601801Z`. The report
+still showed 26 fresh healthy venues, Baoan unhealthy, zero old active email
+backlog and 384 expired reminders; other historical email counts were unchanged.
+No newly queued eligible email or natural submission/delivery receipt was
+observed. Counts since recovery remained:
+
+| Channel | Submitted | Provider-delivered | Failed | Unknown |
+| --- | ---: | ---: | ---: | ---: |
+| Subscription email | 0 | 0 | 0 | 0 |
+| System email | 0 | 0 | 0 | 0 |
+
+The email consumer and ownership switch were stable through this nine-minute
+observation, but natural provider delivery remains unverified. Continue with
+read-only `email-status` observations;
+do not create a test notification or change subscription/deduplication state to
+manufacture a receipt. No synthetic notification was sent during recovery.
+
+[Read-only Airflow health 41267301618](https://github.com/claude89757/wechat-on-airflow/actions/runs/41267301618/job/124732686688)
+at `2026-11-01T02:59:46Z` found the existing Airflow image lacked Baoan (`baoti`)
+DAG source and registration; other venue checks had recent natural successes.
+Sender readiness returned HTTP 200, but the WeChat consumer remained stopped.
+
+[Business health 41267447926](https://github.com/claude89757/wechat-on-airflow/actions/runs/41267447926/job/124733116086),
+generated at `2026-11-01T03:01:30Z` with job output completed at
+`2026-11-01T03:02:48.8036628Z`, confirmed a healthy email worker with no new
+unknown submissions, terminal failures or stalled backlog in either mail queue.
+Host, edge and email retained
+`bd8ee98381cca5f0a4c8d0a674590012d76adc57`. Sender was ready, with Appium,
+device and durable idempotency checks passing, but its actual commit was
+`9cca72d73eb05c502446bd1d947c4307d7f73f35` (`exactSenderCommit=false`).
+`wechatDeliveryEnabled=false` and `zacks-wechat-worker=false`; four historical
+pending WeChat records remained. Sender readiness is not evidence of restored
+WeChat delivery.
+
+Group routing was not changed. Baoan/Pi collection, WeChat delivery and the
+incomplete multi-component rollout remain separate outstanding work.
+This is email-consumer recovery, not successful
+all-27-venue acceptance, WeChat recovery, or completion of the 0.9.0 release.
+No release tag or acceptance state was created. See the
+[email recovery runbook](runbooks/email-delivery-recovery.md).
+
+## Rendered puzzle challenge confirmed on the Pi on 2026-10-31
+
+[Controlled same-profile repeat 41211132530](https://github.com/claude89757/wechat-on-airflow/actions/runs/41211132530)
+used the same `c72b3278b628a0d5638ee220289e1a423ef99ff7` and retained service
+profile as the first attempt. One complete Dashah/Baoan cycle passed. In the
+second cycle Dashah verified all five dates, while Baoan's third product
+(`111319`) encountered access verification. Both DAG pause flags were restored;
+no Pi activation or notification occurred.
+
+The explicit one-day PNG artifact was downloaded and visually inspected. It
+shows a fully rendered image puzzle, slider and instruction to complete the
+puzzle. There are no missing-image indicators. Thus zero known semantic/legacy
+handles does not establish that the verification SDK failed to load. The helper
+only supports an ordinary semantic slider with a rightward/end-of-track
+instruction; it cannot recognize or solve this puzzle. No gesture was attempted.
+Profile continuity alone did not prevent recurrence, and the exact upstream
+WAF triggering rule remains unknown. Do not reuse coordinates from an expired
+challenge or treat one passed inspection as stable unattended access.
+
+[Read-only business health 41211415368](https://github.com/claude89757/wechat-on-airflow/actions/runs/41211415368)
+against the already-upgraded `bd8ee98381cca5f0a4c8d0a674590012d76adc57` confirmed
+a fresh healthy production Dashah observation and no Baoan observation. Host and
+edge identities matched that commit; Sender remained on its earlier identity.
+Delivery switches were disabled, both consumers lacked fresh heartbeats, and
+acceptance was incomplete. PostgreSQL migration reconciliation still passed.
+This is a partial rollout requiring roll-forward, not a completed release.
+
+## First service-profile preflight on 2026-10-31
+
+[Pi preflight 41210794526](https://github.com/claude89757/wechat-on-airflow/actions/runs/41210794526)
+used `c72b3278b628a0d5638ee220289e1a423ef99ff7`, after
+[CI 41210287689](https://github.com/claude89757/wechat-on-airflow/actions/runs/41210287689).
+Baoan verified all three products on both dates. Dashah failed its initial page:
+Vue/app roots existed, but no schedule component or cells were found, and both
+verification flags were false. Passive logs again showed a favicon 404 and one
+unattributed other-host loading failure, with no recorded TLS/DNS/CSP/script
+syntax error. This does not identify why the schedule did not mount.
+No complete comparison cycle passed. Drain and pause restoration were verified;
+no Pi apply or notification occurred. The first manual capture covered only
+verification failures, so this unready page produced no image. Manual opt-in
+capture now also covers non-verification source-readiness failures with the same
+privacy, size and retention restrictions. Service-profile continuity remains an
+unproven access-stability hypothesis; the controlled repeat above subsequently
+reproduced verification after one complete successful cycle.
+
+## Partial 0.9.0 rollout and browser-state continuity on 2026-10-31
+
+[Ship 41205840288](https://github.com/claude89757/wechat-on-airflow/actions/runs/41205840288)
+used `bd8ee98381cca5f0a4c8d0a674590012d76adc57`, after
+[CI 41205329014](https://github.com/claude89757/wechat-on-airflow/actions/runs/41205329014).
+All preflights passed. The Pi preflight verified three complete cycles, restored
+the original pause flags and retained identical complete primary booking-rule
+sources. Host-core routine-upgrade then succeeded. Pi apply failed in its
+candidate's first Dashah page with explicit challenge text/mask, no schedule
+component, and no known verification handle/frame. This is genuine access
+verification, distinct from the corrected local wire timeout. It occurred before
+Pi activation, so there was no Pi unit replacement to roll back. Airflow/Sender
+application steps and tagging were skipped. The protected safety-pause operation
+succeeded; host delivery is paused pending roll-forward, with PostgreSQL queues
+retained and no D1 fallback or reimport.
+
+The reviewed launcher discarded the entire preflight profile at exit and used
+another fresh profile in apply, then a third live profile. Thus the verified
+browser cache/site state did not reach activation. The exact WAF rule remains
+unknown; continuity is a lifecycle correction, not proof that every challenge
+was caused by profile recreation. Guarded candidates and the live unit now use
+the same new service-owned private root, outside the legacy directory that the
+old scraper deletes. Ownership marker and permission checks reject unrelated
+profiles. Normal tab closure flushes browser state before bounded termination.
+Unquiesced probes remain isolated; profile/cookie files are never copied out.
+
+A default-off manual preflight capture can provide a bounded public verification
+page PNG, with contact/login-surface checks and one-day artifact retention.
+Only metadata enters logs. This enables inspection of the actual missing UI
+without assuming that zero known selectors proves no rendered control exists.
+Real source and natural-cycle acceptance still block release completion.
+
+## Successful candidate and release-preflight isolation gap on 2026-10-31
+
+[Three-cycle Pi evidence 41202959550](https://github.com/claude89757/wechat-on-airflow/actions/runs/41202959550)
+used `9a7ebc68ff1756b612dc6375a312d81c27ad103e`, after
+[CI 41202679969](https://github.com/claude89757/wechat-on-airflow/actions/runs/41202679969).
+The scoped drain/restoration succeeded; all three candidate cycles verified
+Dashah's five dates and Baoan's three products on both dates. The last cycle
+retained 16 outdoor, three indoor and three wind/rain court identities with fresh
+source arrays. No real test send occurred and unrelated services were unchanged.
+The complete `isAvailableStatic` and `isNoBook` sources were identical across
+Baoan groups, with representative available/unavailable samples consistent with
+those rules. Renderer scanning remained capped/incomplete and some unrelated
+formatter diagnostics truncated; `bookability_verified` deliberately remains false.
+This is source-rule review and candidate evidence, not a booking transaction or
+natural production-cycle acceptance.
+
+The first formal [ship 41203870674](https://github.com/claude89757/wechat-on-airflow/actions/runs/41203870674)
+stopped in ordinary Pi preflight, before any application deployment, host-core
+upgrade, delivery pause or tag. That path omitted the drain flag and ran alongside
+scheduled Dashah scraping. Both venues reported `schedule_not_ready`, no schedule
+component/cells, no detected challenge, and one favicon 404. Baoan reached indoor
+before failing. There was also one unattributed other-host load failure; it is
+not proven to be a required API dependency. The evidence establishes different
+concurrency conditions, not which shared resource caused initialization failure.
+
+Release preflight now explicitly reserves the shared Pi browser capacity using
+the already verified scoped guard and all three candidate cycles. Both manual
+and reusable defaults enable it; special manual diagnostics may explicitly opt
+out and do not weaken the release's explicit guard. Application apply keeps its
+own mandatory drain and all source checks. This aligns preflight with the
+production task pool's single-browser condition.
+
+`gh run view --log` omitted the large successful report line. The raw workflow
+log ZIP contained the complete sanitized JSON and proved `candidateVerifiedCycles=3`.
+Operation reports now use bounded multiline JSON, with parser/transport round-trip
+checks. The fresh [pre-ship Airflow health 41203712820](https://github.com/claude89757/wechat-on-airflow/actions/runs/41203712820)
+passed against unchanged production `c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5`.
+The [post-ship Airflow health 41204282517](https://github.com/claude89757/wechat-on-airflow/actions/runs/41204282517)
+also passed against that unchanged commit after the rejected preflight.
+
+## Quiesced Pi comparison on 2026-10-31
+
+[Protected comparison 41201808352](https://github.com/claude89757/wechat-on-airflow/actions/runs/41201808352)
+used `075da07ff7de750bca2f8f6ea0485afa4c06b63e`, after
+[exact-main CI 41201211803](https://github.com/claude89757/wechat-on-airflow/actions/runs/41201211803).
+The Airflow drain and original pause-state restoration were both verified.
+Dashah verified all five dates. Baoan failed in its first candidate cycle at
+the third native product (`111319`), `product_navigation`, with the now-retained
+`ReadTimeoutError`. No complete Baoan cycle passed, no live service was replaced,
+and no synthetic notification occurred. This failure is a local driver-channel
+timeout, not a newly observed CAPTCHA. Earlier calendar-HTML/challenge evidence
+remains valid and separate. Quiescence did not restore the full candidate;
+it does not rule out every form of host resource contention.
+The independent [post-comparison Airflow health 41202111090](https://github.com/claude89757/wechat-on-airflow/actions/runs/41202111090)
+passed against unchanged production `c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5`.
+
+The driver connection used a ten-second HTTP timeout while allowing twenty
+seconds for page loading and eight seconds for scripts. Follow-up uses the
+supported per-connection `ClientConfig` with thirty seconds for HTTP responses,
+keeping the existing page/script limits. A scrape-deadline watchdog stops only
+the current driver before the thirty-second cleanup reserve, and cleanup uses
+five-second command timeouts. Driver-command failures retain bounded passive
+UI/log counters without repeating a source request or gesture. Source restoration
+and the exact cause of any remaining renderer delay require a new real check.
+Git history traces that ten-second limit to the earlier repair
+`f9fc7351` ([PR #263](https://github.com/claude89757/wechat-on-airflow/pull/263));
+the previous implementation used the normal Chrome driver constructor. This
+timeout regression is distinct from the original integration and from the
+independently observed upstream challenge responses.
+
+## Native product-context comparison on 2026-10-31
+
+[Pi preflight 41199657762](https://github.com/claude89757/wechat-on-airflow/actions/runs/41199657762)
+used `72d5a7902a765f78a8eb0cf968f80464923a9827`, after
+[CI 41199454730](https://github.com/claude89757/wechat-on-airflow/actions/runs/41199454730).
+Both venues failed before Baoan product switching. Dashah had a complete document,
+Vue/app roots, no schedule component/cells and no detected challenge. Baoan
+stopped in `initial_schedule` for outdoor `111317`, with an exception code omitted
+by the fixed source-error allowlist. Both reported native UA policy and matching
+Chromium/ChromeDriver versions. This run neither proves a challenge nor validates
+the per-product context repair. No live scraper apply or synthetic send occurred.
+
+Ordinary preflight leaves scheduled Dashah collection running. The next controlled
+comparison uses an explicit manual-only quiesced preflight, reusing the existing
+scoped drain/restore guard, to distinguish concurrent browser workload from the
+separate calendar-verification evidence. Known urllib3 transport exception class
+names are retained without messages. An absent diagnostic must not be called CAPTCHA.
+The fresh [Airflow health 41200280400](https://github.com/claude89757/wechat-on-airflow/actions/runs/41200280400)
+passed against unchanged production `c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5`
+before the scoped comparison. This is a runtime-health baseline, not evidence
+of fresh successful YDMap business observations.
+
+## Shared session comparison did not restore Baoan on 2026-10-31
+
+[Retained-session Pi preflight 41198130676](https://github.com/claude89757/wechat-on-airflow/actions/runs/41198130676)
+used `470347ea52e9fe265ef09c383262c8e6736fc38b`, after
+[CI 41197937129](https://github.com/claude89757/wechat-on-airflow/actions/runs/41197937129).
+Dashah verified all five dates with `profileResetBeforeScrape=false`. Baoan again
+failed at wind/rain, the third product, with calendar HTML and six normal order
+JSON responses. The page was visible/focused and no known verification control
+appeared. Retaining the shared profile therefore did not restore the tested
+first Baoan inspection. No apply or synthetic notification occurred.
+
+The follow-up treats each product as a separate source: native initial URL,
+fixed private per-product profile, fresh browser/driver, then explicit fresh date
+selections. Browsers run serially and every earlier browser closes before the
+next starts. Product state is retained in its own fixed directory across polls;
+no profile rotation or external state import is introduced. All products/dates
+must still pass before the venue observation is returned. This uses the same
+single-product collection shape as Dashah and removes cross-product tab selection;
+The launcher also removes the hard-coded user agent (including its architecture
+and version), so browser identity comes from Chromium itself. The old
+`userAgentVersionMatchesBrowser` field is no longer inferred from that constant;
+`userAgentOverrideEnabled=false` records the actual launcher policy. These changes
+restore the native browser flow; their individual causal contributions remain
+unproven until controlled evidence is available. Real access restoration remains
+unproven until the new candidate passes.
+
+## Baoan pacing did not restore access on 2026-10-31
+
+[Pi preflight 41196917740](https://github.com/claude89757/wechat-on-airflow/actions/runs/41196917740)
+used `009c3bc93c30742d78404e625261ea7833377093`, after
+[CI 41196727411](https://github.com/claude89757/wechat-on-airflow/actions/runs/41196727411).
+Dashah verified all five dates. Baoan again failed at the third product's calendar
+request despite 30-second product spacing: calendar HTML observed, six normal
+order JSON responses and six config JSON responses. The page was visible and
+focused (`documentHidden=0`, `documentFocused=1`), with Vue/app roots present.
+The browser console recorded one HTTP 404; the resource is not attributable from
+this summary and is not a proven verification-SDK failure. No known slider/frame
+appeared after three seconds. No gesture or production apply occurred.
+
+Thirty-second spacing is insufficient by itself; this is not a proven short-window
+quota. The remaining controlled session-lifecycle comparison preserves only the
+scraper's dedicated Chromium profile instead of deleting it before every scrape.
+It narrows directory permissions to 0700, rejects symlinks/shared directories and
+continues to discard each isolated candidate's directory at exit. Chromium owns
+its site state; no personal profile, cookie or credential is copied/exported.
+Source/date freshness checks remain mandatory, so preserving browser state does
+not authorize stale observations. This is a repair candidate, not proof of access.
+
+## Baoan pacing comparison inconclusive on 2026-10-31
+
+[Normal-order paced Pi preflight 41195644144](https://github.com/claude89757/wechat-on-airflow/actions/runs/41195644144)
+used `90167a1d7cf7ed982e3945b2b955d651f24aa955`, after exact-main
+[CI 41195446255](https://github.com/claude89757/wechat-on-airflow/actions/runs/41195446255).
+Both venues failed. Baoan stopped at `initial_schedule` / `schedule_not_ready`,
+requested outdoor `111317`: document complete, no schedule component, zero cells,
+and both challenge flags false. It never reached product switching, so this run
+neither validates nor rejects the new 30-second product pacing. The existing
+passive diagnostic was limited to explicit access challenges and retained no
+network/console counters for this initialization failure. Follow-up also captures
+those counters after schedule timeout, including HTTP, script MIME and fixed
+JavaScript error categories. No raw logs, page bodies or credentials are exported.
+
+The fresh read-only [Airflow health 41195470640](https://github.com/claude89757/wechat-on-airflow/actions/runs/41195470640)
+passed against unchanged production `c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5`.
+No production apply or synthetic notification occurred.
+
+## Baoan verification moves with product sequence on 2026-10-31
+
+[Corrected-tab cold comparison 41194768457](https://github.com/claude89757/wechat-on-airflow/actions/runs/41194768457)
+used `717abffb489980c2b3ba83e0f499ec23420ab228`, after exact-main
+[CI 41194601584](https://github.com/claude89757/wechat-on-airflow/actions/runs/41194601584).
+The wind/rain-first flow progressed through wind/rain and outdoor, then encountered
+verification at the third product, indoor `103224`. Selected/source/requested
+identities now agreed. Passive logs recorded six order JSON responses, six config
+JSON responses, two calendar JSON responses and one calendar HTML response.
+The challenge mask/text were visible and no known slider/frame appeared after
+three seconds. No gesture ran. Both venues failed the overall gate; no apply occurred.
+
+The failure therefore followed the third product activation rather than a fixed
+wind/rain product. This supports a sequence/load-related access-control problem,
+not a known provider quota or a proven server-side rule. The immediate blocker
+is now specifically the calendar HTML response. The next candidate retains the
+normal product order but spaces Baoan product activations by at least 30 seconds
+from the previous product's verified readiness. Date/source verification and the
+DAG's two-minute cadence are unchanged; no blocked request is retried. This pacing
+is a conservative repair to verify, not a claim of restored production service.
+
+## Baoan product-tab click defect confirmed on 2026-10-31
+
+[Cold wind/rain Pi comparison 41193935434](https://github.com/claude89757/wechat-on-airflow/actions/runs/41193935434)
+used `ec669e5f403b7e52059c4e9ec9c3f8695712a753`, after
+[CI 41193468462](https://github.com/claude89757/wechat-on-airflow/actions/runs/41193468462).
+It progressed beyond the first wind/rain group, then failed `product_id_mismatch`:
+requested outdoor `111317`, actual selected/source indoor `103224`, phase
+`product_navigation`, 32 cells, no challenge text or mask, no gesture attempted.
+The partial scrape was discarded. Both venues failed the overall gate; this
+is not complete wind/rain or production acceptance.
+
+An ordinary local Chrome comparison loaded the outdoor page, then displayed
+wind/rain courts 1–3 through a normal tab click without verification. This is an
+uncontrolled environment comparison and does not identify the Pi WAF trigger.
+It does establish that the wind/rain product is currently usable elsewhere.
+
+Rendered DOM inspection reproduced the wrong-target defect. The outdoor slider
+wrapper contains all four product labels, begins with the outdoor label, and
+has one child. The actual outdoor LI also has one child. The scraper compared
+only the first text line and sorted only by child count, so the earlier 464-pixel
+wrapper won over the 116-pixel LI. Clicking its centre selected the indoor tab.
+Matching the complete rendered catalog label leaves only the actual LI in this
+observed DOM. The regression fixture includes the leading wrapper with the same
+child count and rejects wrapper-only matches. Access verification remains a
+separate unresolved blocker until the corrected candidate passes real checks.
+
+## Baoan passive network evidence on 2026-10-31
+
+[Pi preflight 41192484593](https://github.com/claude89757/wechat-on-airflow/actions/runs/41192484593)
+used `3db376580094f537190b211e52824efd9fe31bbc`, after exact-main
+[CI 41192266357](https://github.com/claude89757/wechat-on-airflow/actions/runs/41192266357).
+Dashah verified all five dates. Baoan stopped at wind/rain product `111319`,
+`product_navigation`, with challenge text/mask true, no known handles or frames,
+and no change after three seconds. The log command succeeded: 344 performance
+entries and 10 browser entries; six order JSON responses, last order status 200,
+four script responses and one generic resource-load console error. No gesture ran.
+No order HTML or classified DNS/TLS/CSP/script-failure counter was observed within
+this logging window. The generic resource error is not attributable to the
+verification component and is not a proven root cause. Source evidence was
+truncated, not rejected. The candidate failed; no production apply occurred.
+
+Repeated failures at the same wind/rain transition justify a controlled cold-start
+comparison. The next manual-only preflight option starts that product first while
+retaining all products/dates. It cannot yield a release-ready candidate, even if
+all reads succeed. This distinguishes product-specific access behavior from
+sequence/load effects without treating either as already proven.
+
+## Baoan verification UI rendering evidence on 2026-10-31
+
+[Pi preflight 41191656978](https://github.com/claude89757/wechat-on-airflow/actions/runs/41191656978)
+used `f5fa1c375cdd0ca562041051b782a5b2b3a579cb`, after
+[CI 41191447760](https://github.com/claude89757/wechat-on-airflow/actions/runs/41191447760).
+Baoan again stopped at wind/rain product `111319` with both challenge flags true.
+The diagnostic counted two visible challenge roots, four child references,
+zero frames, zero semantic handles and zero known legacy handles. All control
+counts remained unchanged after three seconds; one verification script reference
+was present. No gesture ran and both venues failed; no apply occurred.
+
+The network/console summary had no counters. Reviewing the exact pinned Selenium
+4.46.0 wheel reproduced that generic `webdriver.Remote` has no `get_log` helper;
+only ChromiumDriver provides it, using `execute("getLog", {"type": ...})`.
+The new diagnostic had incorrectly used that missing convenience method and
+caught the error. This is a diagnostic defect, not the cause of the original
+challenge. The repair uses the supported wire command and explicitly distinguishes
+unavailable logs from successfully read empty logs. No network-root-cause claim
+can be made from this first rendering report.
+
+## Baoan native product navigation evidence on 2026-10-31
+
+[Pi preflight 41188809021](https://github.com/claude89757/wechat-on-airflow/actions/runs/41188809021)
+used `95695a841c42783dac6eecac9e74bb41c0c0b54a` after exact-main
+[CI 41188648825](https://github.com/claude89757/wechat-on-airflow/actions/runs/41188648825).
+Native product navigation reached Baoan's wind/rain product `111319`, with
+selected/source product identity matching and the schedule component present.
+Challenge text and mask were visible; `failurePhase=product_navigation`,
+`verificationControl=controls_missing`, and `verificationAttempted=false`.
+Both venues failed the overall candidate. No partial Baoan dates were published,
+no verification gesture ran, and no production apply occurred.
+
+This rules out full URL navigation as the sole explanation. The current
+verification probe only recognizes semantic slider markers, so `controls_missing`
+does not prove that the page has no rendered control. Follow-up passive diagnostics
+count known legacy handles, frames and challenge children, and summarize browser
+network/console failures without exporting raw logs or verification material.
+No cause is inferred from missing events before WebDriver attached.
+
+## Operations MCP First Deployment On 2026-10-31
+
+PR #280 merged as `2df99f59c34daf508c32a8dd991567a833afbcba`, with
+[main CI 41188110663](https://github.com/claude89757/wechat-on-airflow/actions/runs/41188110663)
+passing. [Phone policy apply 41188925292](https://github.com/claude89757/wechat-on-airflow/actions/runs/41188925292)
+verified collaborator readiness, authenticated MCP and anonymous/invalid-token denial
+without replacing the phone runtime or overwriting membership.
+
+[Pi apply 41188772801](https://github.com/claude89757/wechat-on-airflow/actions/runs/41188772801)
+failed before DNS publication. Owner-authorized LAN read-only inspection found
+both new units inactive, exit status zero, and successful module import. A local
+real-process regression reproduced the cause: Node resolves the entrypoint's
+symlink but the main-module comparison used the unresolved argv path, so it
+exited without opening the listener. Resolve both paths before comparing.
+Recovery must also allow replacement of an installed but inactive runtime.
+
+[VPS preflight 41188711853](https://github.com/claude89757/wechat-on-airflow/actions/runs/41188711853)
+failed with an opaque remote error; its root cause is not yet established.
+The follow-up adds bounded prerequisite diagnostics, root-without-sudo support
+and a legacy system-Python-compatible bootstrap. Do not claim host acceptance
+until new protected apply/health reports pass. The unchanged Airflow baseline
+`c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5` passed
+[health 41187484116](https://github.com/claude89757/wechat-on-airflow/actions/runs/41187484116).
+
+## Pi browser compatibility and Baoan product transition on 2026-10-31
+
+[Pi run 41187599590](https://github.com/claude89757/wechat-on-airflow/actions/runs/41187599590)
+used exact-main `058c576d0298b310f6837f4fd339e972ce3fa0d9`, after
+[CI 41187408444](https://github.com/claude89757/wechat-on-airflow/actions/runs/41187408444).
+Chromium and ChromeDriver both reported `137.0.7151.119`; the configured UA
+version matched. There is no version-mismatch evidence in this run. The report
+confirmed `profileResetBeforeScrape=true`, but does not prove that profile reset
+caused access verification.
+
+Baoan failed at the indoor product's initial schedule check after the outdoor
+product flow, with challenge text and mask visible and no schedule component.
+The configured requested product is `103224` (the workflow masks a substring
+of this otherwise public ID). `verificationControl=controls_missing`,
+`verificationAttempted=false` and `verificationOutcome=unsupported_control`:
+no gesture was executed and no verification rejection can be inferred.
+Both venues were in the failed-venue list; Dashah's individual failure details
+were not retained because the report carries the final failure's diagnostics.
+
+The follow-up uses the normal visible product controls instead of reopening
+Baoan URLs, with replacement of both source arrays required across products.
+This is a navigation repair to be tested, not evidence that provider access
+or production availability has been restored. No apply or synthetic send occurred.
+An anonymous public bootstrap read returned Dashah `healthy=false` with
+`lastInspectionAt=2026-10-31T09:21:51.688694Z`. This is a fresh unhealthy
+business observation despite earlier successful DAG health checks; it does not
+identify the upstream failure cause or prove that the condition is permanent.
+
+## Remote Administration Expansion On 2026-10-31
+
+The owner confirmed successful phone OAuth connection, then authorized full
+Pi/VPS administration, Cloudflare frontend administration and explicit
+collaborator grants. Live Cloudflare domain readback maps both frontend
+hostnames to `zacks-tennis-alerts`; public health reported `runtime=airflow-host`
+and business commit `9cca72d73eb05c502446bd1d947c4307d7f73f35` at inspection.
+This observation is not a replacement for exact-SHA production acceptance.
+
+The new [operations runbook](runbooks/remote-operations-mcp.md) defines independent
+Pi/VPS administrator applications, browser-confirmed privileged operations,
+author-managed groups and official Cloudflare API MCP. Runtime activation and
+collaborator policy acceptance require protected workflow evidence. No synthetic
+notifications, phone sessions or production administrator commands are permitted
+in automated smoke checks. Do not infer deployment from committed endpoint names.
+
+## Authorized Baoan verification diagnosis on 2026-10-31
+
+The user explicitly authorized normal verification interaction. [PR #278](https://github.com/claude89757/wechat-on-airflow/pull/278)
+added a default-off, isolated-preflight-only, single native slider gesture.
+Exact-main `4d4ec984f69ac50242b2b592930f129b0196f24f` passed
+[CI 41186252105](https://github.com/claude89757/wechat-on-airflow/actions/runs/41186252105).
+The authorized [Pi run 41186625223](https://github.com/claude89757/wechat-on-airflow/actions/runs/41186625223)
+verified all five Dashah dates and again reported a Baoan challenge, but retained
+`verificationAttempted=false` and `verificationOutcome=not_needed`. The initial
+implementation only offered the gesture on the first product's initial load.
+The control flow therefore places this challenge after that initial check,
+during a later date/product transition; the exact transition was not retained.
+No gesture was attempted. The follow-up permits the same single authorization
+at the first encountered challenge during date/product waits and retains the
+requested product and wait phase on failure. It does not introduce retries.
+
+Both venues use the same Pi candidate/browser launch configuration. The scraper
+currently erases its dedicated profile before each venue scrape. Whether this
+session reset contributes to the provider's different behavior remains unproven;
+a challenge is the observed blocker, not a proven explanation of its root cause.
+No production apply or synthetic notification has occurred.
+
+## Baoan access verification confirmed on 2026-10-31
+
+Independent [Pi preflight 41184233295](https://github.com/claude89757/wechat-on-airflow/actions/runs/41184233295)
+at exact-main `534aea237fd1d1b1162b665e8e988f794a24734d`, after
+[CI 41184072259](https://github.com/claude89757/wechat-on-airflow/actions/runs/41184072259),
+verified all five Dashah dates but failed Baoan with `access_verification` /
+`captcha`. The Baoan page host was `bawtt.ydmap.cn`; challenge text and visible
+challenge mask were both true, document completion was true, the schedule
+component was absent, and cell count was zero. `failedVenues` contained only
+`baoti`. This is direct evidence of the current Baoan access blocker; it does
+not retrospectively identify the earlier unclassified exception.
+
+No production apply, Baoan activation, release tag or synthetic notification
+was performed. No interaction with the verification control was attempted.
+Do not strip the mask, forge provider credentials,
+replay external cookies or repeatedly retry the blocked request. Access must
+be restored through the site's normal verification path before the coupled
+release and three-natural-cycle acceptance can proceed.
+The post-debug [Airflow health 41184414718](https://github.com/claude89757/wechat-on-airflow/actions/runs/41184414718)
+passed against the unchanged production Airflow SHA
+`c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5`.
+
+## Baoan candidate debugging on 2026-10-31, 08:01 UTC
+
+[PR #274](https://github.com/claude89757/wechat-on-airflow/pull/274) corrected
+availability classification using the page's pure `isAvailableStatic` predicate
+and restored the old four-second initial browser warm-up. Exact-main commit
+`ae1f8dc8aa3aa48aceb6a291698dbf5682fe4961` passed
+[CI 41182616409](https://github.com/claude89757/wechat-on-airflow/actions/runs/41182616409).
+Its protected [Pi preflight 41182781096](https://github.com/claude89757/wechat-on-airflow/actions/runs/41182781096)
+successfully verified all five Dashah dates (October 31 through November 4).
+The live pure predicate matches the previously inspected provider implementation;
+renderer coverage remains incomplete and `bookability_verified` remains false.
+This run reached Baoan but failed with `scrape_not_verified`, no retained source
+exception code and no source snapshot. This is different from the earlier Dashah
+captcha failure; it does not establish a Baoan captcha or successful Baoan parsing.
+No apply, release tag or synthetic notification occurred.
+
+The pre-change [Airflow health 41182042963](https://github.com/claude89757/wechat-on-airflow/actions/runs/41182042963)
+passed for `c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5`. Public and origin Host Core
+health endpoints report `9cca72d73eb05c502446bd1d947c4307d7f73f35`, while the remote
+repository is at the Airflow commit. A [read-only Host Core check 41182464849](https://github.com/claude89757/wechat-on-airflow/actions/runs/41182464849)
+using the API's SHA was consequently rejected by the remote-worktree identity
+guard. Neither component SHA alone satisfies all existing health identities;
+the coupled release must reconcile them, without reimporting D1.
+
+The following [preflight 41183535577](https://github.com/claude89757/wechat-on-airflow/actions/runs/41183535577)
+on `2723b8e3a3efa71b530b66a6e5711bd1b6f4d3f5` stopped at Dashah with
+`schedule_not_ready`: document complete, no schedule component, zero cells,
+and both challenge text/mask flags false. It did not reach Baoan. A single
+successful Dashah run therefore does not establish reliable source availability
+or prove that the warm-up change resolved all earlier failures. Diagnostic
+preflight now inspects both independent venues once while retaining a failed
+overall gate if either fails; production activation requirements remain unchanged.
+
+## Cursor MCP Callback Repair On 2026-10-31
+
+The owner reported `redirect_uri is not allowed by the account configuration`
+from Cursor/Grok. Cursor's public client metadata at
+`https://cursor.com/oauth/mcp-client.json` declares exact agents, bot, Grok and
+loopback callbacks. The desktop DCR also supplies the owner-reported
+`cursor://anysphere.cursor-mcp/oauth/callback`. A standard MCP SDK registration
+probe with this callback set failed with `InvalidClientMetadataError` before
+login. Existing protected health run
+[41180959376](https://github.com/claude89757/wechat-on-airflow/actions/runs/41180959376)
+passed with 18 tools, one online phone and no phone sessions.
+
+The repair adds only these four non-loopback callback URIs to the existing
+allowlist. Localhost/loopback were already enabled. Owner-only login, PKCE,
+grant duration, machine credentials and installed Pi runtime are unchanged.
+Deployment and repeat DCR acceptance must be recorded before claiming repair;
+the owner must still complete the real client login. No phone sessions or
+notifications are permitted during verification.
+
+## Baoan YDMap Production Acceptance Blocked On 2026-10-31
+
+The external Baoan contribution [PR #262](https://github.com/claude89757/wechat-on-airflow/pull/262)
+was integrated through [PR #263](https://github.com/claude89757/wechat-on-airflow/pull/263),
+with follow-ups [#265](https://github.com/claude89757/wechat-on-airflow/pull/265)
+and [#267](https://github.com/claude89757/wechat-on-airflow/pull/267). The resulting main commit
+`302d90a3a0b8f1f07b31c5a4b71039b1c641b8c2` passed its complete
+[exact-main push CI 41178652599](https://github.com/claude89757/wechat-on-airflow/actions/runs/41178652599).
+The original PR is closed as superseded, with its contributor attribution retained in the integrated commit.
+Merged code and passing CI do not establish production availability acceptance.
+
+The first protected [Pi preflight 41177429612](https://github.com/claude89757/wechat-on-airflow/actions/runs/41177429612),
+against `9758330d9fcdc462c442a513479b8814c94b37a5`, returned generic
+`operation_failed` with no inspections. Its original exception class was not retained.
+Code review and a local executable-lookup reproduction found that the isolated
+candidate's restricted PATH omitted `/usr/sbin`, while its launcher used bare
+`runuser`. PR #267 switched both launch sites to the checked absolute executable
+and retained bounded, allowlisted exception/stage diagnostics. The local reproduction
+supports this cause; the first production report did not itself record `FileNotFoundError`.
+
+The second protected [Pi preflight 41179031523](https://github.com/claude89757/wechat-on-airflow/actions/runs/41179031523),
+against `302d90a3a0b8f1f07b31c5a4b71039b1c641b8c2`, passed the exact-main/CI gate
+and reached candidate venue inspection. It stopped on Dashah (`dsh`) with
+`failure=access_verification`, `sourceFailure=captcha`, page host `wxsports.ydmap.cn`,
+zero cells and `inspections=[]`. Baoan was not reached. No validated renderer source
+or bookability evidence was obtained; neither empty availability nor Baoan access
+success can be inferred. Presence flags only indicate diagnostic keys existed.
+
+No Pi YDMap apply, Baoan production release, `0.9.0` release tag or test notification
+was performed. The post-attempt protected
+[health run 41179265173](https://github.com/claude89757/wechat-on-airflow/actions/runs/41179265173)
+passed at 2026-10-31 07:07 UTC against expected and deployed
+`c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5` (release `0.8.7`). It reported healthy
+services, 29 existing DAGs, zero import errors and no recent failed DAG runs. The
+paid Dashah DAG's latest three scheduled runs succeeded. These runtime checks do
+not supply the missing candidate source or Baoan bookability evidence.
+
+A separate read-only [Host Core observation diagnosis 41179428118](https://github.com/claude89757/wechat-on-airflow/actions/runs/41179428118)
+used that Airflow SHA as its expected identity and stopped at
+`local host-core deployment identity mismatch`. It emitted no business report,
+actual Host Core SHA, venue observation or scope timestamps. The failed identity
+expectation does not establish a new production fault or a common component
+version. Verify actual component identities before the next coupled release;
+do not treat this attempt as evidence of healthy persisted observations.
+
+Provider requests and apply remain stopped at this access-verification blocker.
+Resume only after legitimate provider access is available, through the existing
+exact-main CI and protected-environment gates, isolated candidate preflight for both venues and actual
+source/bookability review. A subsequent apply must retain the bounded scoped DAG
+pause/drain/restore, rollback, installed-version and live-inspection checks; downstream
+release, natural-cycle acceptance and tagging retain their existing full gates.
+Do not bypass access verification or automatically repeat the blocked requests.
+
 ## 2026-10-31: Dedicated Free-Court Group Restored, Shared Groups Paused
 
 Per the user's latest request, new Dashah free-court messages now target
@@ -16,10 +760,72 @@ Verify deployment, three natural free-court cycles and expiry of the old
 five-minute queued-intent window before declaring the old recipient path
 inactive. Retain historical outbox and dedupe state; send no synthetic alerts.
 
+## Pi MCP OAuth Acceptance On 2026-10-31
+
+The canonical MCP endpoint `https://appium-mcp.zacks.vision/mcp` now supports
+owner-only Cloudflare Managed OAuth. Operations commit
+`dfa1cabf41606a7c53d7488dc9df1bae4dcbf49c` passed
+[exact-main CI 41178012459](https://github.com/claude89757/wechat-on-airflow/actions/runs/41178012459),
+[protected preflight 41178608944](https://github.com/claude89757/wechat-on-airflow/actions/runs/41178608944)
+and [protected apply 41178679434](https://github.com/claude89757/wechat-on-airflow/actions/runs/41178679434).
+The installed Pi runtime remains `837f7efe35ae5a7042584509c0859879407e5903`.
+All five monitored host service start identities remained unchanged, and no
+credential was rotated. There are still 18 tools, one configured/online phone
+and zero active phone sessions; a second phone is not established by this work.
+
+Live Access configuration has exactly the dedicated machine policy plus the
+pinned owner's Allow policy through the existing Cloudflare login provider.
+Other account members are not phone operators. Access tokens last 15 minutes,
+with a seven-day refresh grant. DCR permits loopback/localhost and the documented
+ChatGPT callback paths only. The sole new WAF rule matches the exact MCP hostname
+and skips `bic` only, retaining Access, unrelated hostnames and other WAF checks.
+The application audience, Tunnel, DNS and existing machine credentials are unchanged.
+
+[Post-apply health 41178756304](https://github.com/claude89757/wechat-on-airflow/actions/runs/41178756304)
+and [idempotent preflight 41178811262](https://github.com/claude89757/wechat-on-airflow/actions/runs/41178811262),
+followed by [health 41178967478](https://github.com/claude89757/wechat-on-airflow/actions/runs/41178967478),
+passed: RFC 9728 discovery, PKCE S256 advertisement, anonymous/invalid machine
+and invalid Bearer denial, authenticated read-only MCP and unchanged host runtime.
+The repeated preflight made no configuration writes. A separate standard MCP SDK
+probe, without authentication headers, successfully registered a public OAuth
+client and prepared a resource-bound PKCE authorization request. It stopped
+before login: zero user tokens, phone sessions or external test notifications
+were acquired/created/sent. The first real client still requires the owner to
+complete Cloudflare login/consent; no end-to-end user OAuth login is claimed.
+
+[Post-change Airflow health 41178931979](https://github.com/claude89757/wechat-on-airflow/actions/runs/41178931979)
+passed against the unchanged `c3fb88ccdef7a381643f6df5e3dac4ccc63e06e5`
+business release. This MCP control-plane change does not deploy the separate
+venue/YDMap work concurrently merged into the repository.
+
+Managed OAuth remains a Cloudflare Beta. Existing connector DNS-refresh timeout
+categories remain observable with readiness true and zero restarts; this release
+does not claim to fix them. Existing 23 moderate npm runtime audit advisories and
+the separate legacy public raw Appium surface are unchanged.
+
 ## Pi MCP OAuth Policy On 2026-10-31
 
+The first OAuth-only attempt at operations commit
+`bf33e578750db53727d9a029ca2a55f509524752` passed
+[exact-main CI](https://github.com/claude89757/wechat-on-airflow/actions/runs/41175526455)
+and [read-only preflight](https://github.com/claude89757/wechat-on-airflow/actions/runs/41176146352).
+[Apply 41176227450](https://github.com/claude89757/wechat-on-airflow/actions/runs/41176227450)
+was not accepted. Zone HTTP/security analytics identified nine `/mcp` 403s from
+Browser Integrity Check during the attempt, including the OAuth discovery
+retries; no discovery endpoint was reached. Audit records confirm that the
+requested owner-only OAuth settings were stored and then disabled again.
+The original machine-only policy was restored and independently verified through
+[protected previous-operations health 41176381601](https://github.com/claude89757/wechat-on-airflow/actions/runs/41176381601).
+The automatic rollback flag was
+false because Cloudflare added inactive default DCR fields to disabled OAuth;
+that structural comparison did not prove an authorization restore failure.
+The follow-up requires an exact-host, BIC-only skip rule, semantic disabled-OAuth
+restore checks and fixed non-secret failure reasons. No service was restarted,
+phone session created or test notification sent. That attempt did not establish
+OAuth acceptance; the successful follow-up is recorded above.
+
 The owner approved managed OAuth for Codex-like agents instead of manually
-copying Access service-token headers. The candidate protected OAuth-only
+copying Access service-token headers. The protected OAuth-only
 operation enables owner-only Cloudflare login on the existing application,
 with 15-minute access tokens and a seven-day refresh grant. It preserves the
 dedicated machine token/policy, application audience, DNS, Tunnel and installed

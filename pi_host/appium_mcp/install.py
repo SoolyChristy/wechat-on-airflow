@@ -16,6 +16,7 @@ import tempfile
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from pathlib import Path
 
 BASE = Path("/opt/pi-appium-mcp")
@@ -26,6 +27,123 @@ CONNECTOR_READY = "http://127.0.0.1:49393/ready"
 NODE_SHA = "c9057c6a3b8fbb9651ed115c1e96d4a7281b7b9c9ca89fa05865c98ed7ffd437"
 NODE_DIR = "node-v22.23.4-linux-armv7l"
 EXISTING = ("wechat-sender.service", "zacks-agent.service", "cloudflared-dsh.service")
+HEALTH_ERROR_CODES = {
+    "sender_service_inactive",
+    "agent_service_inactive",
+    "legacy_tunnel_inactive",
+    "appium_6001_unhealthy",
+    "appium_6002_unhealthy",
+    "sender_health_unhealthy",
+    "sender_not_ready",
+}
+# The installer is uploaded as one standalone file. Keep this fixed boundary
+# in sync with the runner; never serialize exception messages or command output.
+FAILURE_DIAGNOSTICS = {
+    "validation": {"invalid_operation"},
+    "existing_health": HEALTH_ERROR_CODES,
+    "node_archive": {"node_archive_invalid"},
+    "candidate_reclaim": {"candidate_reclaim_failed"},
+    "candidate_disk": {"candidate_disk_insufficient"},
+    "service_account": {"service_account_unavailable"},
+    "connector_runtime": {
+        "cloudflared_missing",
+        "cloudflared_help_failed",
+        "cloudflared_flags_unsupported",
+        "cloudflared_service_user_failed",
+    },
+    "node_runtime": {"node_runtime_invalid"},
+    "source_bundle": {"source_bundle_invalid"},
+    "private_write": {"private_write_failed"},
+    "dependency_cache": {"dependency_cache_invalid"},
+    "offline_dependencies": {"offline_dependency_install_failed"},
+    "candidate_tests": {"candidate_tests_failed"},
+    "candidate_cleanup": {"candidate_cleanup_failed"},
+    "post_preflight_health": HEALTH_ERROR_CODES,
+}
+SERVICE_ERROR_CODES = {
+    "sender_service_inactive",
+    "agent_service_inactive",
+    "legacy_tunnel_inactive",
+}
+SERVICE_STATUS_ENUMS = {
+    "LoadState": set("loaded not-found error bad-setting masked merged stub unknown".split()),
+    "ActiveState": set(
+        "active reloading inactive failed activating deactivating maintenance refreshing unknown".split()
+    ),
+    "SubState": set(
+        "dead condition start-pre start start-post running exited reload reload-signal reload-notify "
+        "stop stop-watchdog stop-sigterm stop-sigkill stop-post final-watchdog final-sigterm "
+        "final-sigkill failed auto-restart auto-restart-queued cleaning unknown".split()
+    ),
+    "Result": set(
+        "success resources timeout exit-code signal core-dump watchdog start-limit-hit protocol "
+        "oom-kill exec-condition unknown".split()
+    ),
+    "UnitFileState": set(
+        "enabled enabled-runtime linked linked-runtime alias masked masked-runtime static disabled "
+        "indirect generated transient bad unknown".split()
+    ),
+    "Type": set("simple forking oneshot dbus notify notify-reload idle exec unknown".split()),
+}
+SERVICE_STATUS_LIMITS = {"ExecMainCode": 6, "ExecMainStatus": 255, "NRestarts": 1_000_000}
+
+
+def safe_service_status(value):
+    if (
+        not isinstance(value, dict)
+        or set(value) != SERVICE_STATUS_ENUMS.keys() | SERVICE_STATUS_LIMITS.keys()
+    ):
+        return None
+    report = {}
+    for name, allowed in SERVICE_STATUS_ENUMS.items():
+        field = value[name]
+        report[name] = field if type(field) is str and field in allowed else "unknown"
+    for name, limit in SERVICE_STATUS_LIMITS.items():
+        field = value[name]
+        report[name] = field if type(field) is int and 0 <= field <= limit else None
+    return report
+
+
+def safe_failure_diagnostic(value):
+    required = {"stage", "errorCode"}
+    if not isinstance(value, dict) or not required <= value.keys() <= required | {"serviceStatus"}:
+        return None
+    stage, code = value["stage"], value["errorCode"]
+    if type(stage) is not str or type(code) is not str:
+        return None
+    if code not in FAILURE_DIAGNOSTICS.get(stage, set()):
+        return None
+    report = {"stage": stage, "errorCode": code}
+    if stage in {"existing_health", "post_preflight_health"} and code in SERVICE_ERROR_CODES:
+        status = safe_service_status(value.get("serviceStatus"))
+        if status is not None:
+            report["serviceStatus"] = status
+    return report
+
+
+@contextmanager
+def diagnostic_step(stage, error_code):
+    context = safe_failure_diagnostic({"stage": stage, "errorCode": error_code})
+    if context is None:
+        raise ValueError("invalid_diagnostic_context")
+    try:
+        yield
+    except Exception as exc:
+        # Preserve the original exception type and fail-closed control flow.
+        # Context is supplied by code, never inferred from exception text.
+        exc.failure_diagnostic = context
+        raise
+
+
+def failure_report(exc):
+    return {
+        "ok": False,
+        "errorClass": type(exc).__name__,
+        "externalTestSends": 0,
+        "candidateTests": exc.report if isinstance(exc, CandidateTestFailure) else None,
+        "connector": exc.report if isinstance(exc, ConnectorFailure) else None,
+        "failureDiagnostic": safe_failure_diagnostic(getattr(exc, "failure_diagnostic", None)),
+    }
 
 
 def safe_test_report(value):
@@ -151,17 +269,21 @@ WantedBy=multi-user.target
 
 
 def verify_connector_runtime():
-    connector = shutil.which("cloudflared")
-    if not connector:
-        raise RuntimeError("cloudflared_missing")
-    help_text = run([connector, "tunnel", "--help"])
-    run_help = run([connector, "tunnel", "run", "--help"])
-    if (
-        not all(flag in help_text for flag in ("--metrics", "--log-directory"))
-        or "--token-file" not in run_help
-    ):
-        raise RuntimeError("cloudflared_flags_unsupported")
-    run(["runuser", "-u", "pi-appium-mcp", "--", connector, "--version"])
+    with diagnostic_step("connector_runtime", "cloudflared_missing"):
+        connector = shutil.which("cloudflared")
+        if not connector:
+            raise RuntimeError("cloudflared_missing")
+    with diagnostic_step("connector_runtime", "cloudflared_help_failed"):
+        help_text = run([connector, "tunnel", "--help"])
+        run_help = run([connector, "tunnel", "run", "--help"])
+    with diagnostic_step("connector_runtime", "cloudflared_flags_unsupported"):
+        if (
+            not all(flag in help_text for flag in ("--metrics", "--log-directory"))
+            or "--token-file" not in run_help
+        ):
+            raise RuntimeError("cloudflared_flags_unsupported")
+    with diagnostic_step("connector_runtime", "cloudflared_service_user_failed"):
+        run(["runuser", "-u", "pi-appium-mcp", "--", connector, "--version"])
 
 
 def summarize_tests(payload, exit_code, *, timed_out=False):
@@ -235,13 +357,68 @@ def run(argv, *, timeout=60, env=None, cwd=None):
     return completed.stdout.decode()
 
 
-def health():
-    for unit in EXISTING:
-        run(["systemctl", "is-active", "--quiet", unit])
-    for port, path in ((6001, "/status"), (6002, "/status"), (7001, "/healthz"), (7001, "/readyz")):
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as response:
-            if response.status != 200:
-                raise RuntimeError("existing_health_failed")
+def failed_service_status(unit):
+    # Diagnose only the fixed failed unit. Never query commands, paths or logs.
+    if unit not in EXISTING:
+        return None
+    try:
+        fields = SERVICE_STATUS_ENUMS.keys() | SERVICE_STATUS_LIMITS.keys()
+        completed = subprocess.run(
+            ["systemctl", "show", "--all", "--property=" + ",".join(sorted(fields)), unit],
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        # A missing unit may still return useful fixed properties with nonzero
+        # status. This diagnostic never changes the failed is-active result.
+        if len(completed.stdout) > 4096:
+            return None
+        output = completed.stdout.decode("utf-8", errors="replace")
+        values = {}
+        for line in output.splitlines():
+            name, separator, value = line.partition("=")
+            if separator and name in fields:
+                if name in values:
+                    return None
+                values[name] = value
+        for name in SERVICE_STATUS_LIMITS:
+            value = values.get(name)
+            if value is not None:
+                values[name] = int(value) if re.fullmatch(r"[0-9]{1,10}", value) else None
+        return safe_service_status(values)
+    except Exception:
+        # A secondary diagnostic failure must never replace the original failure.
+        return None
+
+
+def health(*, stage="existing_health"):
+    for unit, code in zip(
+        EXISTING,
+        (
+            "sender_service_inactive",
+            "agent_service_inactive",
+            "legacy_tunnel_inactive",
+        ),
+        strict=True,
+    ):
+        try:
+            with diagnostic_step(stage, code):
+                run(["systemctl", "is-active", "--quiet", unit])
+        except Exception as exc:
+            status = failed_service_status(unit)
+            if status is not None:
+                exc.failure_diagnostic["serviceStatus"] = status
+            raise
+    for port, path, code in (
+        (6001, "/status", "appium_6001_unhealthy"),
+        (6002, "/status", "appium_6002_unhealthy"),
+        (7001, "/healthz", "sender_health_unhealthy"),
+        (7001, "/readyz", "sender_not_ready"),
+    ):
+        with diagnostic_step(stage, code):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as response:
+                if response.status != 200:
+                    raise RuntimeError("existing_health_failed")
 
 
 def unpack(archive, destination, *, trusted_links=False):
@@ -444,8 +621,9 @@ def main():
     parser.add_argument("--commit", required=True)
     parser.add_argument("--staging", type=Path)
     args = parser.parse_args()
-    if os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", args.commit):
-        raise ValueError("root_and_exact_commit_required")
+    with diagnostic_step("validation", "invalid_operation"):
+        if os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", args.commit):
+            raise ValueError("root_and_exact_commit_required")
     health()
     if args.operation == "connector":
         return configure_connector()
@@ -518,66 +696,78 @@ def main():
             "connector": connector,
         }
 
-    if not args.staging or not args.staging.is_dir():
-        raise ValueError("staging_required")
-    archive = args.staging / "node.tar.xz"
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != NODE_SHA:
-        raise ValueError("node_digest_mismatch")
-    BASE.mkdir(mode=0o755, exist_ok=True)
-    pruned = prune_incomplete_candidates()
-    if shutil.disk_usage("/opt").free < 2_000_000_000:
-        raise RuntimeError("insufficient_candidate_disk_space")
-    try:
-        pwd.getpwnam("pi-appium-mcp")
-    except KeyError:
-        run(
-            [
-                "useradd",
-                "--system",
-                "--home-dir",
-                "/var/lib/pi-appium-mcp",
-                "--shell",
-                "/usr/sbin/nologin",
-                "pi-appium-mcp",
-            ]
-        )
-    run(["usermod", "--append", "--groups", "wechat-sender", "pi-appium-mcp"])
+    with diagnostic_step("node_archive", "node_archive_invalid"):
+        if not args.staging or not args.staging.is_dir():
+            raise ValueError("staging_required")
+        archive = args.staging / "node.tar.xz"
+        if hashlib.sha256(archive.read_bytes()).hexdigest() != NODE_SHA:
+            raise ValueError("node_digest_mismatch")
+    with diagnostic_step("candidate_reclaim", "candidate_reclaim_failed"):
+        BASE.mkdir(mode=0o755, exist_ok=True)
+        pruned = prune_incomplete_candidates()
+    with diagnostic_step("candidate_disk", "candidate_disk_insufficient"):
+        if shutil.disk_usage("/opt").free < 2_000_000_000:
+            raise RuntimeError("insufficient_candidate_disk_space")
+    with diagnostic_step("service_account", "service_account_unavailable"):
+        try:
+            pwd.getpwnam("pi-appium-mcp")
+        except KeyError:
+            run(
+                [
+                    "useradd",
+                    "--system",
+                    "--home-dir",
+                    "/var/lib/pi-appium-mcp",
+                    "--shell",
+                    "/usr/sbin/nologin",
+                    "pi-appium-mcp",
+                ]
+            )
+        run(["usermod", "--append", "--groups", "wechat-sender", "pi-appium-mcp"])
     verify_connector_runtime()
-    node = BASE / NODE_DIR
-    if not node.exists():
-        unpack(archive, BASE, trusted_links=True)
-    if run([str(node / "bin/node"), "-p", "process.arch"]).strip() != "arm":
-        raise ValueError("wrong_node_architecture")
-    candidate = Path(tempfile.mkdtemp(prefix=f"candidate-{args.commit[:12]}-", dir=BASE))
-    unpack(args.staging / "source.tar.gz", candidate)
-    verify_source(candidate)
-    verify_private_write(candidate)
-    unpack(args.staging / "cache.tar.gz", candidate / "cache")
+    with diagnostic_step("node_runtime", "node_runtime_invalid"):
+        node = BASE / NODE_DIR
+        if not node.exists():
+            unpack(archive, BASE, trusted_links=True)
+        if run([str(node / "bin/node"), "-p", "process.arch"]).strip() != "arm":
+            raise ValueError("wrong_node_architecture")
+    with diagnostic_step("source_bundle", "source_bundle_invalid"):
+        candidate = Path(tempfile.mkdtemp(prefix=f"candidate-{args.commit[:12]}-", dir=BASE))
+        unpack(args.staging / "source.tar.gz", candidate)
+        verify_source(candidate)
+    with diagnostic_step("private_write", "private_write_failed"):
+        verify_private_write(candidate)
+    with diagnostic_step("dependency_cache", "dependency_cache_invalid"):
+        unpack(args.staging / "cache.tar.gz", candidate / "cache")
     environment = {
         "PATH": f"{node}/bin:/usr/local/bin:/usr/bin:/bin",
         "HOME": str(candidate),
         "npm_config_cache": str(candidate / "cache"),
         "npm_config_offline": "true",
     }
-    run(
-        [
-            str(node / "bin/npm"),
-            "ci",
-            "--ignore-scripts",
-            "--omit=optional",
-            "--no-audit",
-            "--no-fund",
-        ],
-        cwd=candidate,
-        env=environment,
-        timeout=600,
-    )
-    test_report = run_candidate_tests(node, candidate, environment)
-    shutil.rmtree(candidate / "cache")
-    (candidate / "release.txt").write_text(args.commit + "\n")
+    with diagnostic_step("offline_dependencies", "offline_dependency_install_failed"):
+        run(
+            [
+                str(node / "bin/npm"),
+                "ci",
+                "--ignore-scripts",
+                "--omit=optional",
+                "--no-audit",
+                "--no-fund",
+            ],
+            cwd=candidate,
+            env=environment,
+            timeout=600,
+        )
+    with diagnostic_step("candidate_tests", "candidate_tests_failed"):
+        test_report = run_candidate_tests(node, candidate, environment)
+    with diagnostic_step("candidate_cleanup", "candidate_cleanup_failed"):
+        shutil.rmtree(candidate / "cache")
+        (candidate / "release.txt").write_text(args.commit + "\n")
     if args.operation == "preflight":
-        shutil.rmtree(candidate)
-        health()
+        with diagnostic_step("candidate_cleanup", "candidate_cleanup_failed"):
+            shutil.rmtree(candidate)
+        health(stage="post_preflight_health")
         return {
             "ok": True,
             "candidateVerified": True,
@@ -638,15 +828,5 @@ if __name__ == "__main__":
     try:
         print(json.dumps(main(), sort_keys=True))
     except Exception as exc:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "errorClass": type(exc).__name__,
-                    "externalTestSends": 0,
-                    "candidateTests": exc.report if isinstance(exc, CandidateTestFailure) else None,
-                    "connector": exc.report if isinstance(exc, ConnectorFailure) else None,
-                }
-            )
-        )
+        print(json.dumps(failure_report(exc)))
         raise SystemExit(1) from None

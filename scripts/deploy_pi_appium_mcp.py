@@ -31,6 +31,15 @@ OWNER_USER_ID = "4f82fb39465f8effc6486128697946f3"
 CLOUDFLARE_IDP_ID = "5fbaa521-5f28-43bc-a656-009215fa1b95"
 TEAM_DOMAIN = "zacks-vision-ops.cloudflareaccess.com"
 OWNER_POLICY_NAME = "Owner cloud agent OAuth"
+BIC_RULE = {
+    "ref": "pi_mcp_native_clients_bic_only",
+    "description": RESOURCE_NAME + " native clients: BIC only",
+    "expression": f'(http.host eq "{HOSTNAME}")',
+    "action": "skip",
+    "action_parameters": {"products": ["bic"]},
+    "logging": {"enabled": True},
+    "enabled": True,
+}
 OAUTH_CONFIGURATION = {
     "enabled": True,
     "dynamic_client_registration": {
@@ -40,10 +49,106 @@ OAUTH_CONFIGURATION = {
         "allowed_uris": [
             "https://chatgpt.com/connector/oauth/*",
             "https://chatgpt.com/connector_platform_oauth_redirect",
+            "cursor://anysphere.cursor-mcp/oauth/callback",
+            "https://www.cursor.com/agents/mcp/oauth/callback",
+            "https://www.cursor.com/bot/mcp/oauth/callback",
+            "https://grok.com/connectors-oauth-exchange-code/",
         ],
     },
     "grant": {"access_token_lifetime": "15m", "session_duration": "168h"},
 }
+HEALTH_ERROR_CODES = {
+    "sender_service_inactive",
+    "agent_service_inactive",
+    "legacy_tunnel_inactive",
+    "appium_6001_unhealthy",
+    "appium_6002_unhealthy",
+    "sender_health_unhealthy",
+    "sender_not_ready",
+}
+# The remote installer is a standalone upload. Accept only its fixed diagnostic
+# pairs here, independently of remote exception messages or extra JSON fields.
+FAILURE_DIAGNOSTICS = {
+    "validation": {"invalid_operation"},
+    "existing_health": HEALTH_ERROR_CODES,
+    "node_archive": {"node_archive_invalid"},
+    "candidate_reclaim": {"candidate_reclaim_failed"},
+    "candidate_disk": {"candidate_disk_insufficient"},
+    "service_account": {"service_account_unavailable"},
+    "connector_runtime": {
+        "cloudflared_missing",
+        "cloudflared_help_failed",
+        "cloudflared_flags_unsupported",
+        "cloudflared_service_user_failed",
+    },
+    "node_runtime": {"node_runtime_invalid"},
+    "source_bundle": {"source_bundle_invalid"},
+    "private_write": {"private_write_failed"},
+    "dependency_cache": {"dependency_cache_invalid"},
+    "offline_dependencies": {"offline_dependency_install_failed"},
+    "candidate_tests": {"candidate_tests_failed"},
+    "candidate_cleanup": {"candidate_cleanup_failed"},
+    "post_preflight_health": HEALTH_ERROR_CODES,
+}
+SERVICE_ERROR_CODES = {
+    "sender_service_inactive",
+    "agent_service_inactive",
+    "legacy_tunnel_inactive",
+}
+SERVICE_STATUS_ENUMS = {
+    "LoadState": set("loaded not-found error bad-setting masked merged stub unknown".split()),
+    "ActiveState": set(
+        "active reloading inactive failed activating deactivating maintenance refreshing unknown".split()
+    ),
+    "SubState": set(
+        "dead condition start-pre start start-post running exited reload reload-signal reload-notify "
+        "stop stop-watchdog stop-sigterm stop-sigkill stop-post final-watchdog final-sigterm "
+        "final-sigkill failed auto-restart auto-restart-queued cleaning unknown".split()
+    ),
+    "Result": set(
+        "success resources timeout exit-code signal core-dump watchdog start-limit-hit protocol "
+        "oom-kill exec-condition unknown".split()
+    ),
+    "UnitFileState": set(
+        "enabled enabled-runtime linked linked-runtime alias masked masked-runtime static disabled "
+        "indirect generated transient bad unknown".split()
+    ),
+    "Type": set("simple forking oneshot dbus notify notify-reload idle exec unknown".split()),
+}
+SERVICE_STATUS_LIMITS = {"ExecMainCode": 6, "ExecMainStatus": 255, "NRestarts": 1_000_000}
+
+
+def safe_service_status(value):
+    if (
+        not isinstance(value, dict)
+        or set(value) != SERVICE_STATUS_ENUMS.keys() | SERVICE_STATUS_LIMITS.keys()
+    ):
+        return None
+    report = {}
+    for name, allowed in SERVICE_STATUS_ENUMS.items():
+        field = value[name]
+        report[name] = field if type(field) is str and field in allowed else "unknown"
+    for name, limit in SERVICE_STATUS_LIMITS.items():
+        field = value[name]
+        report[name] = field if type(field) is int and 0 <= field <= limit else None
+    return report
+
+
+def safe_failure_diagnostic(value):
+    required = {"stage", "errorCode"}
+    if not isinstance(value, dict) or not required <= value.keys() <= required | {"serviceStatus"}:
+        return None
+    stage, code = value["stage"], value["errorCode"]
+    if type(stage) is not str or type(code) is not str:
+        return None
+    if code not in FAILURE_DIAGNOSTICS.get(stage, set()):
+        return None
+    report = {"stage": stage, "errorCode": code}
+    if stage in {"existing_health", "post_preflight_health"} and code in SERVICE_ERROR_CODES:
+        status = safe_service_status(value.get("serviceStatus"))
+        if status is not None:
+            report["serviceStatus"] = status
+    return report
 
 
 def owner_identity():
@@ -91,6 +196,27 @@ def validate_access_policies(policies, credentials):
     ):
         raise RuntimeError("access_ownership_mismatch")
     others = [policy for policy in policies if policy is not machine[0]]
+    collaborators = [p for p in others if p.get("name") == "Zacks phone operators"]
+    if collaborators:
+        groups = cf(
+            "GET", f"/accounts/{os.environ['CLOUDFLARE_ACCOUNT_ID']}/access/groups?per_page=100"
+        )
+        matches = [g for g in groups if g.get("name") == "Zacks phone operators"]
+        if len(groups) >= 100 or len(matches) != 1 or len(collaborators) != 1:
+            raise RuntimeError("access_ownership_mismatch")
+        expected = {
+            "name": "Zacks phone operators",
+            "decision": "allow",
+            "precedence": 3,
+            "include": [{"group": {"id": matches[0]["id"]}}],
+            "exclude": [],
+            "require": [{"login_method": {"id": CLOUDFLARE_IDP_ID}}],
+        }
+        if any(collaborators[0].get(key) != value for key, value in expected.items()):
+            raise RuntimeError("access_ownership_mismatch")
+        others = [p for p in others if p not in collaborators]
+        if not others:
+            raise RuntimeError("access_ownership_mismatch")
     if others and (
         len(others) != 1
         or any(others[0].get(key) != value for key, value in owner_policy(owner_identity()).items())
@@ -99,11 +225,12 @@ def validate_access_policies(policies, credentials):
 
 
 class RemoteOperationError(RuntimeError):
-    def __init__(self, error_class, test_report=None, connector=None):
+    def __init__(self, error_class, test_report=None, connector=None, diagnostic=None):
         super().__init__("pi_operation_failed")
         self.error_class = error_class
         self.test_report = test_report
         self.connector = connector
+        self.diagnostic = safe_failure_diagnostic(diagnostic)
 
 
 def safe_connector_report(value):
@@ -208,9 +335,12 @@ def remote(client, command, payload="", timeout=900):
         error_class = None
         test_report = None
         connector = None
+        diagnostic = None
         try:
             report = json.loads(value)
             candidate = report.get("errorClass")
+            if report.get("ok") is False:
+                diagnostic = safe_failure_diagnostic(report.get("failureDiagnostic"))
             if report.get("ok") is False and candidate in {
                 "ValueError",
                 "TypeError",
@@ -230,7 +360,7 @@ def remote(client, command, payload="", timeout=900):
                     connector = safe_connector_report(report.get("connector"))
         except (ValueError, AttributeError, TypeError):
             pass
-        raise RemoteOperationError(error_class, test_report, connector)
+        raise RemoteOperationError(error_class, test_report, connector, diagnostic)
     return value.decode()
 
 
@@ -676,6 +806,101 @@ class OAuthConfigurationFailure(DomainMigrationFailure):
     def __init__(self, rollback_verified, stage, cause):
         super().__init__(rollback_verified, stage, cause)
         self.args = ("oauth_configuration_failed",)
+        self.reason = (
+            str(cause)
+            if str(cause)
+            in {
+                "oauth_challenge_missing",
+                "oauth_metadata_untrusted",
+                "oauth_resource_mismatch",
+                "oauth_issuer_mismatch",
+                "oauth_protocol_incomplete",
+                "oauth_metadata_invalid",
+                "oauth_acceptance_failed",
+                "access_ownership_mismatch",
+                "bic_ownership_mismatch",
+            }
+            else None
+        )
+
+
+def bic_snapshot():
+    try:
+        ruleset = cf(
+            "GET", f"/zones/{ZONE_ID}/rulesets/phases/http_request_firewall_custom/entrypoint"
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+        return {"ruleset": None, "rule": None}
+    owned = [rule for rule in ruleset.get("rules", []) if rule.get("ref") == BIC_RULE["ref"]]
+    if (
+        ruleset.get("kind") != "zone"
+        or ruleset.get("phase") != "http_request_firewall_custom"
+        or len(owned) > 1
+        or any(
+            rule.get(key, {"enabled": True} if key == "logging" else None) != value
+            for rule in owned
+            for key, value in BIC_RULE.items()
+        )
+    ):
+        raise RuntimeError("bic_ownership_mismatch")
+    return {"ruleset": ruleset, "rule": owned[0] if owned else None}
+
+
+def enable_bic_exception(state):
+    if state["rule"]:
+        return None
+    if state["ruleset"]:
+        updated = cf(
+            "POST",
+            f"/zones/{ZONE_ID}/rulesets/{state['ruleset']['id']}/rules",
+            copy.deepcopy(BIC_RULE),
+        )
+    else:
+        updated = cf(
+            "POST",
+            f"/zones/{ZONE_ID}/rulesets",
+            {
+                "name": RESOURCE_NAME + " API compatibility",
+                "kind": "zone",
+                "phase": "http_request_firewall_custom",
+                "rules": [copy.deepcopy(BIC_RULE)],
+            },
+        )
+    matches = [rule for rule in updated.get("rules", []) if rule.get("ref") == BIC_RULE["ref"]]
+    if len(matches) != 1 or not matches[0].get("id") or not updated.get("id"):
+        raise RuntimeError("bic_ownership_mismatch")
+    return {
+        "ruleset_id": updated["id"],
+        "rule_id": matches[0]["id"],
+        "created_ruleset": not state["ruleset"],
+    }
+
+
+def restore_bic_exception(marker):
+    if not marker:
+        return
+    current = bic_snapshot()
+    if (
+        not current["rule"]
+        or current["rule"]["id"] != marker["rule_id"]
+        or current["ruleset"]["id"] != marker["ruleset_id"]
+    ):
+        raise RuntimeError("bic_ownership_mismatch")
+    path = f"/zones/{ZONE_ID}/rulesets/{marker['ruleset_id']}"
+    cf("DELETE", path + f"/rules/{marker['rule_id']}")
+    if marker["created_ruleset"]:
+        remaining = bic_snapshot()["ruleset"]
+        if remaining and remaining["id"] == marker["ruleset_id"] and not remaining.get("rules"):
+            cf("DELETE", path)
+
+
+def oauth_restored(actual, expected):
+    # Access materializes default DCR flags even when OAuth is disabled.
+    if expected is None or expected.get("enabled") is False:
+        return actual is None or actual.get("enabled") is False
+    return actual == expected
 
 
 def oauth_ready(app, policies):
@@ -687,7 +912,13 @@ def oauth_ready(app, policies):
         and oauth.get("grant") == OAUTH_CONFIGURATION["grant"]
         and app.get("allowed_idps") == [CLOUDFLARE_IDP_ID]
         and app.get("auto_redirect_to_identity") is True
-        and len(policies) == 2
+        and (
+            len(policies) == 2
+            or (
+                len(policies) == 3
+                and any(p.get("name") == "Zacks phone operators" for p in policies)
+            )
+        )
     )
 
 
@@ -704,7 +935,7 @@ def oauth_discovery():
         if exc.code != 401:
             raise RuntimeError("oauth_challenge_missing") from None
     match = re.search(r'\bresource_metadata="([^"]+)"', challenge)
-    if not match or not challenge.lower().startswith("bearer "):
+    if not challenge.lower().startswith("bearer "):
         raise RuntimeError("oauth_challenge_missing")
 
     def trusted_url(value, hosts):
@@ -732,29 +963,40 @@ def oauth_discovery():
             raise RuntimeError("oauth_metadata_invalid")
         return document
 
-    resource_url = trusted_url(match[1], {HOSTNAME})
-    if not urllib.parse.urlsplit(resource_url).path.startswith(
-        "/.well-known/oauth-protected-resource"
-    ):
-        raise RuntimeError("oauth_metadata_untrusted")
-    resource = metadata(resource_url, {HOSTNAME})
-    issuers = resource.get("authorization_servers", [])
-    if resource.get("resource") not in (url, f"https://{HOSTNAME}") or len(issuers) != 1:
-        raise RuntimeError("oauth_resource_mismatch")
-    issuer = trusted_url(issuers[0], {HOSTNAME, TEAM_DOMAIN})
-    parsed = urllib.parse.urlsplit(issuer)
-    discovery = urllib.parse.urlunsplit(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            "/.well-known/oauth-authorization-server" + parsed.path.rstrip("/"),
-            "",
-            "",
-        )
+    # Access supports RFC 9728 and its documented RFC 8414 application bootstrap.
+    resource = metadata(
+        match[1] if match else f"https://{HOSTNAME}/.well-known/oauth-authorization-server",
+        {HOSTNAME, TEAM_DOMAIN} if match else {HOSTNAME},
     )
-    server = metadata(discovery, {HOSTNAME, TEAM_DOMAIN})
-    if server.get("issuer") != issuer:
-        raise RuntimeError("oauth_issuer_mismatch")
+    mode = "protected_resource"
+    if not match or (
+        resource.get("issuer") and not ({"resource", "authorization_servers"} & resource.keys())
+    ):
+        server = resource
+        trusted_url(server.get("issuer", ""), {HOSTNAME, TEAM_DOMAIN})
+        mode = "authorization_server"
+    else:
+        issuers = resource.get("authorization_servers", [])
+        if resource.get("resource") not in (url, f"https://{HOSTNAME}") or len(issuers) != 1:
+            raise RuntimeError("oauth_resource_mismatch")
+        issuer = trusted_url(issuers[0], {HOSTNAME, TEAM_DOMAIN})
+        parsed = urllib.parse.urlsplit(issuer)
+        discovery = urllib.parse.urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                "/.well-known/oauth-authorization-server" + parsed.path.rstrip("/"),
+                "",
+                "",
+            )
+        )
+        server = (
+            resource
+            if resource.get("issuer") == issuer
+            else metadata(discovery, {HOSTNAME, TEAM_DOMAIN})
+        )
+        if server.get("issuer") != issuer:
+            raise RuntimeError("oauth_issuer_mismatch")
     for key in ("authorization_endpoint", "token_endpoint", "registration_endpoint"):
         trusted_url(server.get(key, ""), {HOSTNAME, TEAM_DOMAIN})
     if (
@@ -764,7 +1006,7 @@ def oauth_discovery():
         <= set(server.get("grant_types_supported", []))
     ):
         raise RuntimeError("oauth_protocol_incomplete")
-    return {"oauthDiscoveryVerified": True, "pkceS256Advertised": True}
+    return {"oauthDiscoveryVerified": True, "pkceS256Advertised": True, "oauthDiscoveryMode": mode}
 
 
 def verify_oauth_discovery():
@@ -779,6 +1021,7 @@ def verify_oauth_discovery():
 
 def configure_oauth(credentials, *, apply):
     state = domain_snapshot(credentials)
+    bic = bic_snapshot()
     app, policies = state["app"], state["policies"]
     if (
         app["domain"] != HOSTNAME
@@ -795,7 +1038,7 @@ def configure_oauth(credentials, *, apply):
     ):
         raise RuntimeError("owner_identity_provider_unavailable")
     verify_public(credentials, HOSTNAME)
-    complete = oauth_ready(app, policies)
+    complete = oauth_ready(app, policies) and bool(bic["rule"])
     report = {
         "ok": True,
         "applied": False,
@@ -804,13 +1047,18 @@ def configure_oauth(credentials, *, apply):
         "credentialsRotated": False,
         "publicUrl": f"https://{HOSTNAME}/mcp",
         "oauthLoginVerified": False,
+        "bicExceptionReady": bool(bic["rule"]),
     }
     if complete:
         report.update(verify_oauth_discovery())
     if not apply or complete:
         return report
-    stage = "enable_owner_oauth"
+    stage = "enable_bic_exception"
+    marker = None
+    access_update_attempted = False
     try:
+        marker = enable_bic_exception(bic)
+        stage = "enable_owner_oauth"
         body = access_body(app, policies, [HOSTNAME])
         if len(policies) == 1:
             body["policies"].append(owner_policy(email))
@@ -819,6 +1067,7 @@ def configure_oauth(credentials, *, apply):
             allowed_idps=[CLOUDFLARE_IDP_ID],
             auto_redirect_to_identity=True,
         )
+        access_update_attempted = True
         cf("PUT", state["app_path"], body)
         stage = "verify_owner_oauth"
         final = domain_snapshot(credentials)
@@ -827,26 +1076,34 @@ def configure_oauth(credentials, *, apply):
             or final["app"]["aud"] != app["aud"]
             or final["config"] != state["config"]
             or final["new_dns"] != state["new_dns"]
+            or not bic_snapshot()["rule"]
             or not {policy["id"] for policy in policies}
             <= {policy["id"] for policy in final["policies"]}
         ):
             raise RuntimeError("oauth_acceptance_failed")
         report.update(verify_oauth_discovery())
         report.update(verify_public(credentials, HOSTNAME))
-        return {**report, "applied": True, "oauthReady": True}
+        return {**report, "applied": True, "oauthReady": True, "bicExceptionReady": True}
     except Exception as cause:
         restored = False
         try:
-            body = access_body(app, policies, [HOSTNAME])
-            body.setdefault("oauth_configuration", {"enabled": False})
-            body.setdefault("allowed_idps", [])
-            body.setdefault("auto_redirect_to_identity", False)
-            cf("PUT", state["app_path"], body)
+            if access_update_attempted:
+                body = access_body(app, policies, [HOSTNAME])
+                body.setdefault("oauth_configuration", {"enabled": False})
+                body.setdefault("allowed_idps", [])
+                body.setdefault("auto_redirect_to_identity", False)
+                cf("PUT", state["app_path"], body)
+            restore_bic_exception(marker)
             final = domain_snapshot(credentials)
-            expected_oauth = app.get("oauth_configuration") or {"enabled": False}
             if (
                 final["app"]["aud"] != app["aud"]
-                or final["app"].get("oauth_configuration") != expected_oauth
+                or not oauth_restored(
+                    final["app"].get("oauth_configuration"), app.get("oauth_configuration")
+                )
+                or final["app"].get("allowed_idps", []) != app.get("allowed_idps", [])
+                or final["app"].get("auto_redirect_to_identity", False)
+                != app.get("auto_redirect_to_identity", False)
+                or bool(bic_snapshot()["rule"]) != bool(bic["rule"])
                 or {policy["id"] for policy in final["policies"]}
                 != {policy["id"] for policy in policies}
             ):
@@ -1001,6 +1258,9 @@ def main():
                     "candidateTests": exc.test_report
                     if isinstance(exc, RemoteOperationError)
                     else None,
+                    "failureDiagnostic": exc.diagnostic
+                    if isinstance(exc, RemoteOperationError)
+                    else None,
                     "httpStatus": exc.code if isinstance(exc, urllib.error.HTTPError) else None,
                     "rollbackVerified": rollback_verified,
                     "domainRollbackVerified": exc.rollback_verified
@@ -1018,6 +1278,9 @@ def main():
                     else None,
                     "oauthStage": exc.stage if isinstance(exc, OAuthConfigurationFailure) else None,
                     "oauthCauseClass": exc.cause_class
+                    if isinstance(exc, OAuthConfigurationFailure)
+                    else None,
+                    "oauthFailureReason": exc.reason
                     if isinstance(exc, OAuthConfigurationFailure)
                     else None,
                     "oauthHttpStatus": exc.http_status

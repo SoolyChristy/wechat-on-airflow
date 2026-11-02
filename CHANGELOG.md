@@ -3,6 +3,109 @@
 This project follows Semantic Versioning. Entries describe user-visible runtime
 and operational changes.
 
+## [Unreleased]
+
+### Added
+
+- Productize the existing subscription window as named ideal-time presets.
+  New subscriptions created in the web app default to 工作日晚间
+  (Monday–Friday, 19:00–22:00), narrower than the previous every-day evening
+  default. The other presets are 午休局 (Monday–Friday 12:00–14:00), 周末上午
+  (Saturday–Sunday 08:00–12:00), 周末下午 (Saturday–Sunday 14:00–18:00), and
+  自定义. Button copy and `preferenceLabel` use these same words.
+- Email is sent only when a free slot overlaps that personal window. WeChat
+  group delivery stays venue-level: any active subscription for the venue
+  opens the gate, and group messages are not filtered by the personal window.
+- This phase adds no subscription column and no multi-window jsonb. A second
+  window is a second subscription. Labels are derived from the stored weekday
+  mask and clock.
+- Changing an existing window from the subscription list asks for confirmation
+  first, because the change can cancel pending or retry reminder email.
+  Submitted mail and WeChat rows are left as they are.
+
+## [0.10.0] - 2026-11-02
+
+### Added
+
+- Let verified subscribers pause reminders for specific playing dates across
+  their venue subscriptions, select multiple dates in My Subscriptions, restore
+  individual dates, and undo the dates changed by their latest action. Preferences
+  persist by email in Host Core and use the Asia/Shanghai calendar.
+- Add a playing-date link to subscriber reminder emails. The website preselects
+  that date and preserves the selection through email verification; opening a
+  link never changes notification preferences by itself.
+- Fence date changes against observation matching, queue claims and final email
+  dispatch. Release unused claims for definitely-unsent cancelled reminders;
+  preserve submitted or uncertain sends and all subscription history. Restoring
+  a date requalifies only eligible pause-cancelled reminders on a fresh natural
+  observation without resetting event identity or original creation timestamps.
+- Extend the rollback-only production API probe with authenticated pause/list/
+  restore, idempotency, anonymous denial, and no-subscriber-mail checks.
+- Add a brief email-subscription guide to each WeChat group's first natural
+  morning court alert (06:00–12:00 Asia/Shanghai). Durable per-group history
+  prevents repeats across venues and restarts; safe retries and uncertain sends
+  retain the existing delivery safeguards. No extra message is sent.
+
+### Fixed
+
+- Include allowlisted systemd state when a protected phone check finds an
+  inactive existing service, preserving the original failure and never changing
+  service state or printing raw service output.
+- Identify protected phone preflight failures with fixed stage/error-code pairs,
+  retaining every check without exposing exception messages or command output.
+- Pass the Pi interruption option only during apply. Readiness preflight remains
+  read-only and no longer rejects an apply-only option before connecting.
+- Let a recovery upgrade replace a stopped WeChat consumer that is still on an
+  older image. The live API and email worker must still match, and no WeChat
+  consumer may be running. A failed recovery check now reports its fixed guard
+  name instead of only `RuntimeError`.
+
+### Changed
+
+- Keep required CI on lint, types, unit tests and the web unit check. Browser
+  interaction runs are no longer a release gate.
+- Release preflight checks that the Pi scraper and WeChat sender are alive.
+  It does not pause Dashah, run three browser cycles, or install a sender
+  candidate. Apply may replace the scraper while one inspection is in progress.
+- Tag a full ship after worker activation. Missing natural venue cycles or
+  email/WeChat receipts no longer hold the pipeline, block the tag, or pause
+  delivery.
+- Align the README license badge and license statement with the MIT `LICENSE`.
+- State current acceptance as all 26 active venue DAGs. The count matches the
+  runtime target, public venue cards, and architecture. Dated incident records
+  keep their historical counts.
+- Disable Dependabot automatic rebasing. Routine version-update pull requests
+  stay closed to the merge queue.
+- Type the shared HTTPS proxy watcher and remove it from the strict mypy
+  exclusion list. The remaining six adapters stay the bounded typing backlog.
+
+## [0.9.1] - 2026-11-01
+
+### Changed
+
+- Withdraw the Bao'an Tennis Center integration from PR #263 at the owner's
+  request after the incomplete 0.9.0 rollout. Restore the 26-venue active
+  catalogue and retire Bao'an collection and new subscriptions. Exclude the
+  retired venue from delivery while retaining stored subscriptions and history.
+- Limit the protected YDMap scraper rollout and real-page acceptance to
+  Dashah. Retain its booking correctness, browser-state, locking, identity,
+  drain, rollback and evidence safeguards, and preserve unrelated MCP changes.
+
+### Fixed
+
+- Add an explicit protected recovery upgrade for an already-migrated runtime
+  with active email and paused WeChat. Require the recorded runtime commit and
+  control timestamp, unchanged existing schema, fresh email ownership and
+  passing exact-commit CI before fencing and aligning every release component.
+- Keep normal routine-upgrade checks, exact Sender identity, transaction
+  rollback probes and natural-delivery acceptance unchanged. A healthy release
+  awaiting natural receipts remains pending without a release tag.
+- Restore email through the existing consumer with stale reminders expired by
+  normal policy, preserving deduplication and uncertain-send records.
+
+This entry describes the recovery candidate. Production completion requires the
+protected workflow's final evidence and is not asserted by this changelog.
+
 ## [0.9.0] - 2026-10-31
 
 ### Added
@@ -20,6 +123,10 @@ and operational changes.
 
 ### Fixed
 
+- Use the page's read-only booking predicate to exclude empty cells that lack
+  prices, are not open for online booking, or represent merged/special ranges.
+  Preserve the original browser startup warm-up and retain bounded challenge
+  evidence for Pi preflight diagnosis.
 - Require source venue, product name and freshly loaded booking date evidence
   before accepting a court grid. Reject stale rows, incomplete product groups,
   access verification pages and old scraper responses instead of publishing

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Local Chromium scrape service for the YDMap tennis venues."""
+"""Local Chromium scrape service for the Dashah YDMap tennis venue."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import threading
@@ -25,29 +25,24 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
 DSH_BOOKING_URL = "https://wxsports.ydmap.cn/booking/schedule/100220?salesItemId=100000"
-BAOTI_SALES_ID = "104036"
-BAOTI_GROUP_ITEMS = (
-    ("outdoor", "室外", "111317"),
-    ("indoor", "室内", "103224"),
-    ("windrain", "风雨", "111319"),
-)
 LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = int(os.environ.get("YDMAP_LISTEN_PORT", "8788"))
-PROFILE = Path(os.environ.get("YDMAP_PROFILE", "/tmp/dsh_ydmap_profile"))
+PROFILE = Path(os.environ.get("YDMAP_PROFILE", "/tmp/pi-ydmap-service-profile-v2"))
+PROFILE_MARKER = b"pi-ydmap-service-profile-v2\n"
 DEBUG_PORT = int(os.environ.get("YDMAP_DEBUG_PORT", "9224"))
 SCHEMA_VERSION = 2
 SCRAPE_TIMEOUT = 210
+DRIVER_HTTP_TIMEOUT = 30
+DRIVER_CLEANUP_TIMEOUT = 5
+UI_CAPTURE_MAX_BYTES = 256 * 1024
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-UA = (
-    "Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/137.0.7151.119 Safari/537.36"
-)
 CHROMIUM_BIN = "/usr/lib/chromium/chromium"
 CHROMEDRIVER = "/usr/local/bin/chromedriver"
 DEFAULT_DAYS = 5
 DEFAULT_VENUE = "dsh"
 SCRAPE_LOCK = threading.Lock()
 SOURCE_METHODS = (
+    "isAvailableStatic",
     "textFun",
     "isNoBook",
     "classObj",
@@ -114,18 +109,12 @@ SOURCE_ONLINE_ENUMS = frozenset(
 ) | {"开放", "关闭", "开启", "不开放"}
 
 
-def _baoti_group_url(sales_item_id: str) -> str:
-    return f"https://bawtt.ydmap.cn/booking/schedule/{BAOTI_SALES_ID}?salesItemId={sales_item_id}"
-
-
 VENUE_GROUPS: dict[str, tuple[tuple[str, str, str], ...]] = {
     "dsh": (("", "", DSH_BOOKING_URL),),
-    "baoti": tuple((key, label, _baoti_group_url(item)) for key, label, item in BAOTI_GROUP_ITEMS),
 }
 
 VENUE_NAMES: dict[str, str] = {
     "dsh": "大沙河国际网球交流中心",
-    "baoti": "宝安网球中心",
 }
 
 FIND_DATE_JS = """
@@ -166,8 +155,9 @@ function visible(el) {
   return true;
 }
 // Slider is the ordinary product/date strip, not a verification challenge.
-const captcha = /Access\s+Verification|slide\s+to\s+verify|访问\s*验证|安全\s*验证|人机\s*验证|验证码|滑动\s*验证/i.test(bodyText) ||
-  [...document.querySelectorAll('.waf-nc-mask')].some(visible);
+const challengeText = /Access\s+Verification|slide\s+to\s+verify|访问\s*验证|安全\s*验证|人机\s*验证|验证码|滑动\s*验证/i.test(bodyText);
+const challengeMaskVisible = [...document.querySelectorAll('.waf-nc-mask')].some(visible);
+const captcha = challengeText || challengeMaskVisible;
 const accessError = captcha ? 'captcha' :
   /访问的?频次过快|请求过于频繁|too many requests|rate limit/i.test(bodyText) ? 'rate_limited' :
   /请先登录|登录后查看|sign in to continue/i.test(bodyText) ? 'login_required' : null;
@@ -231,6 +221,20 @@ rows.forEach((row) => {
     const venue = col.platformInfo && col.platformInfo.venueName;
     if (!venue) return;
     if (!courtNames.includes(venue)) courtNames.push(venue);
+    // Use the page's read-only booking predicate, not a subset of CSS states.
+    // It also checks price, online booking, release time and merged cells.
+    // Missing/changed predicates fail the scrape rather than imply empty courts.
+    if (!accessError) {
+      if (typeof table.isAvailableStatic !== 'function') {
+        throw new Error('bookability_predicate_unavailable');
+      }
+      if (table.isTicket !== false) throw new Error('bookability_product_type_unverified');
+      const available = table.isAvailableStatic(col);
+      if (typeof available !== 'boolean') throw new Error('bookability_predicate_invalid');
+      if (!available || col.orderInfo != null) return;
+    } else {
+      return;
+    }
     const cls = col.className || '';
     const expired = col.expired === true || col.expired === 1;
     if (expired) return;
@@ -246,6 +250,10 @@ rows.forEach((row) => {
 });
 const result = {
   captcha,
+  challengeText,
+  challengeMaskVisible,
+  documentComplete: document.readyState === 'complete',
+  scheduleComponentPresent: !!table,
   accessError,
   ready: cellCount > 0,
   signature: `${cellCount}:${Object.keys(courts).sort().join(',')}:${JSON.stringify(courts)}`,
@@ -272,7 +280,7 @@ const result = {
   },
 };
 if (arguments[0] === true && !accessError) {
-  const methodNames = ['textFun', 'isNoBook', 'classObj', 'closeMsg', 'sellerMessage', 'isTicketDisabled'];
+  const methodNames = ['isAvailableStatic', 'textFun', 'isNoBook', 'classObj', 'closeMsg', 'sellerMessage', 'isTicketDisabled'];
   const pending = table ? [table] : [];
   const seen = new Set();
   const covered = new Set();
@@ -363,10 +371,19 @@ return result;
 """
 
 
-def _cleanup_stale_browser() -> None:
-    # Candidate deployment must never erase a shared/home directory via a typo.
-    resolved = PROFILE.resolve()
-    if resolved == Path("/tmp") or not resolved.is_relative_to("/tmp"):
+def _cleanup_stale_browser(profile: Path | None = None) -> None:
+    # Never reuse or chmod a shared/home profile via a typo or final symlink.
+    temporary_root = Path("/tmp").resolve()
+    profile = profile or PROFILE
+    base = PROFILE.resolve()
+    resolved = profile.resolve()
+    if (
+        PROFILE.is_symlink()
+        or profile.is_symlink()
+        or base == temporary_root
+        or not base.is_relative_to(temporary_root)
+        or not resolved.is_relative_to(base)
+    ):
         raise ValueError("YDMAP_PROFILE must be a dedicated directory below /tmp")
     subprocess.run(
         ["pkill", "-f", "--", f"--remote-debugging-port={DEBUG_PORT}([[:space:]]|$)"],
@@ -375,12 +392,26 @@ def _cleanup_stale_browser() -> None:
         stderr=subprocess.DEVNULL,
     )
     time.sleep(1)
-    if PROFILE.exists():
-        shutil.rmtree(PROFILE, ignore_errors=True)
-    PROFILE.mkdir(parents=True, exist_ok=True)
+    # Let Chromium retain its own site state/cache across inspections. This is
+    # the service's dedicated profile, never a copied personal browser profile.
+    try:
+        PROFILE.mkdir(parents=True, mode=0o700)
+    except FileExistsError:
+        pass
+    else:
+        # /tmp can be cleared at boot. A root created by this service must
+        # remain recognizable to the next guarded installer without adopting
+        # or overwriting an existing unmarked directory.
+        marker = PROFILE / ".pi-ydmap-profile"
+        with marker.open("xb") as output:
+            marker.chmod(0o600)
+            output.write(PROFILE_MARKER)
+    PROFILE.chmod(0o700)
+    profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+    profile.chmod(0o700)
 
 
-def _start_chromium(url: str) -> subprocess.Popen[Any]:
+def _start_chromium(url: str, *, profile: Path | None = None) -> subprocess.Popen[Any]:
     env = os.environ.copy()
     env["DISPLAY"] = env.get("DISPLAY") or ":0"
     env.setdefault("XAUTHORITY", "/home/claude/.Xauthority")
@@ -391,7 +422,7 @@ def _start_chromium(url: str) -> subprocess.Popen[Any]:
         CHROMIUM_BIN,
         f"--remote-debugging-port={DEBUG_PORT}",
         "--remote-allow-origins=*",
-        f"--user-data-dir={PROFILE}",
+        f"--user-data-dir={profile or PROFILE}",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-dev-shm-usage",
@@ -399,7 +430,6 @@ def _start_chromium(url: str) -> subprocess.Popen[Any]:
         "--disable-sync",
         "--lang=zh-CN",
         "--accept-lang=zh-CN,zh,en-US,en",
-        f"--user-agent={UA}",
         "--window-size=1280,800",
         "--window-position=80,40",
         url,
@@ -444,6 +474,7 @@ def _stop_driver_service(service: Any) -> None:
 
 
 def _attach(timeout: float = 30) -> webdriver.Remote:
+    from selenium.webdriver.remote.client_config import ClientConfig
     from selenium.webdriver.remote.remote_connection import RemoteConnection
 
     # Configure the connection before NEW_SESSION. Calling the deprecated
@@ -451,16 +482,25 @@ def _attach(timeout: float = 30) -> webdriver.Remote:
     # Selenium; setting it after Chrome() leaves session startup unbounded.
     opts = Options()
     opts.debugger_address = f"127.0.0.1:{DEBUG_PORT}"
+    opts.set_capability("goog:loggingPrefs", {"performance": "ALL", "browser": "ALL"})
     service = Service(CHROMEDRIVER)
     watchdog = threading.Timer(timeout, _stop_driver_service, args=(service,))
     watchdog.daemon = True
     watchdog.start()
     try:
         service.start()
-        connection = RemoteConnection(service.service_url, keep_alive=False)
-        connection.set_timeout(10)
+        # The wire timeout must exceed the 20-second page-load limit, allowing
+        # ChromeDriver to return its own bounded error instead of losing the
+        # local command response. The startup watchdog still bounds NEW_SESSION.
+        config = ClientConfig(
+            remote_server_addr=service.service_url,
+            keep_alive=False,
+            timeout=DRIVER_HTTP_TIMEOUT,
+        )
+        connection = RemoteConnection(client_config=config)
         driver = webdriver.Remote(command_executor=connection, options=opts)
         driver._ydmap_service = service
+        driver._ydmap_client_config = config
         driver.set_page_load_timeout(20)
         driver.set_script_timeout(8)
         return driver
@@ -473,11 +513,26 @@ def _attach(timeout: float = 30) -> webdriver.Remote:
 
 def _stop(proc: subprocess.Popen[Any], driver: webdriver.Remote | None) -> None:
     if driver is not None:
+        config = getattr(driver, "_ydmap_client_config", None)
+        if config is not None:
+            config.timeout = DRIVER_CLEANUP_TIMEOUT
+        try:
+            # Closing our own final tab lets Chromium flush its profile before
+            # the fallback process termination. Remote-attached quit alone need
+            # not close the independently launched browser.
+            driver.close()
+        except Exception:
+            pass
         try:
             driver.quit()
         except Exception:
             pass
         _stop_driver_service(getattr(driver, "_ydmap_service", None))
+    try:
+        proc.wait(timeout=5)
+        return
+    except Exception:
+        pass
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except Exception:
@@ -778,7 +833,12 @@ def _snapshot_issue(
         # Both public data arrays must have been replaced by a new successful
         # generation. A changed selected tab or changed availability signature
         # alone does not prove that the response belongs to that date.
-        if generation <= previous.get("loadGeneration", 0) or any(
+        # A product switch can mount a new table with a fresh generation counter.
+        # Both actual source arrays must still be new; a relabelled old table fails.
+        product_changed = isinstance(previous.get("sourceProduct"), str) and (
+            payload.get("sourceProduct") != previous["sourceProduct"]
+        )
+        if (not product_changed and generation <= previous.get("loadGeneration", 0)) or any(
             version[key] == old.get(key) for key in ("platforms", "orders")
         ):
             return "source_not_refreshed"
@@ -804,6 +864,7 @@ def _wait_for_schedule(
     timeout: float = 45,
     *,
     deadline: float | None = None,
+    phase: str = "initial_schedule",
     **identity: Any,
 ) -> dict[str, Any]:
     end = (
@@ -819,10 +880,24 @@ def _wait_for_schedule(
         if issue is None:
             return last
         if issue in {"captcha", "rate_limited", "login_required"}:
-            return {**last, "ready": False, "error": issue}
+            return {
+                **last,
+                "accessDiagnostics": _access_diagnostics(driver),
+                "ready": False,
+                "error": issue,
+                "failurePhase": phase,
+                "requestedProduct": identity.get("sales_item_id"),
+            }
         time.sleep(min(1.0, max(0.0, end - time.monotonic())))
     # Never return a ready stale snapshot when the date switch timed out.
-    return {**last, "ready": False, "error": issue or "schedule_timeout"}
+    return {
+        **last,
+        "accessDiagnostics": _access_diagnostics(driver),
+        "ready": False,
+        "error": issue or "schedule_timeout",
+        "failurePhase": phase,
+        "requestedProduct": identity.get("sales_item_id"),
+    }
 
 
 def _remaining(deadline: float, maximum: float) -> float:
@@ -830,6 +905,188 @@ def _remaining(deadline: float, maximum: float) -> float:
     if remaining <= 0:
         raise TimeoutError("scrape_deadline_exceeded")
     return min(remaining, maximum)
+
+
+ACCESS_DIAGNOSTIC_JS = r"""
+// Export counts only, never page text, URLs, attributes or challenge material.
+const visible = el => el.getClientRects().length &&
+  getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+const roots = [...document.querySelectorAll('.waf-nc-mask, #WAF_NC_WRAPPER')].filter(visible);
+const inside = selector => [...new Set(roots.flatMap(root => [...root.querySelectorAll(selector)]))];
+const frames = inside('iframe');
+const first = {
+  documentHidden: Number(document.hidden),
+  documentFocused: Number(document.hasFocus()),
+  appRootPresent: Number(!!document.querySelector('#app')),
+  vueRootPresent: Number(!!document.querySelector('#app')?.__vue__),
+  scriptReferences: document.scripts.length,
+  maskRoots: roots.length,
+  maskChildren: roots.reduce((n, root) => n + root.children.length, 0),
+  semanticHandles: inside('[role="slider"], [aria-label="滑块"]').filter(visible).length,
+  legacyHandles: inside('.nc_iconfont.btn_slide, [id$="_n1z"]').filter(visible).length,
+  frames: frames.length,
+  accessibleFrames: frames.filter(frame => {try {return !!frame.contentDocument;} catch (_) {return false;}}).length,
+  verificationScripts: [...document.scripts].filter(script => /(?:captcha|nocaptcha|awsc|\/nc\/|waf)/i.test(script.src)).length
+};
+// Allow asynchronous challenge rendering to settle without another navigation,
+// request replay, or interaction. WebDriver's eight-second script limit applies.
+return new Promise(resolve => setTimeout(() => resolve({...first,
+  settledLegacyHandles: inside('.nc_iconfont.btn_slide, [id$="_n1z"]').filter(visible).length,
+  settledSemanticHandles: inside('[role="slider"], [aria-label="滑块"]').filter(visible).length,
+  settledFrames: inside('iframe').length,
+  settledMaskChildren: roots.reduce((n, root) => n + root.children.length, 0)
+}), 3000));
+"""
+
+
+def _access_diagnostics(driver: webdriver.Remote) -> dict[str, int]:
+    """Summarize passive browser evidence locally; raw logs never leave the Pi."""
+    counts: dict[str, int] = {}
+    try:
+        ui = driver.execute_script(ACCESS_DIAGNOSTIC_JS)
+        if isinstance(ui, dict):
+            for key in (
+                "documentHidden",
+                "documentFocused",
+                "appRootPresent",
+                "vueRootPresent",
+                "scriptReferences",
+                "maskRoots",
+                "maskChildren",
+                "semanticHandles",
+                "legacyHandles",
+                "frames",
+                "accessibleFrames",
+                "verificationScripts",
+                "settledLegacyHandles",
+                "settledSemanticHandles",
+                "settledFrames",
+                "settledMaskChildren",
+            ):
+                if type(ui.get(key)) is int and 0 <= ui[key] <= 10000:
+                    counts[key] = ui[key]
+    except Exception:
+        pass
+
+    def increment(key: str) -> None:
+        counts[key] = min(counts.get(key, 0) + 1, 10000)
+
+    try:
+        # Generic Remote has no Chromium get_log helper in Selenium 4.46.
+        # Use the same wire command as ChromiumDriver, without changing sessions.
+        events = driver.execute("getLog", {"type": "performance"})["value"]
+        counts["performanceLogEntries"] = min(len(events), 10000)
+        requests: dict[str, str] = {}
+        hosts: dict[str, str] = {}
+        for entry in events:
+            message = json.loads(entry["message"])["message"]
+            params = message.get("params", {})
+            method = message.get("method")
+            if method == "Network.requestWillBeSent":
+                path = urlparse(params.get("request", {}).get("url", "")).path
+                requests[params.get("requestId", "")] = (
+                    "order" if path.endswith("/getVenueOrderList") else "other"
+                )
+                host = urlparse(params.get("request", {}).get("url", "")).hostname or ""
+                hosts[params.get("requestId", "")] = (
+                    "aliyunCdnFailures"
+                    if host == "alicdn.com" or host.endswith(".alicdn.com")
+                    else "ydmapFailures"
+                    if host == "ydmap.cn" or host.endswith(".ydmap.cn")
+                    else "otherHostFailures"
+                )
+            elif method == "Network.responseReceived":
+                response = params.get("response", {})
+                path = urlparse(response.get("url", "")).path
+                mime = response.get("mimeType", "")
+                status = response.get("status", 0)
+                if isinstance(status, int | float) and status >= 400:
+                    increment("httpErrors")
+                    if params.get("type") == "Document":
+                        increment("documentHttpErrors")
+                    if path.endswith("/favicon.ico"):
+                        increment("faviconHttpErrors")
+                endpoint = path.rsplit("/", 1)[-1]
+                api = {
+                    "getSalesItemList": "catalog",
+                    "getVenueCalendarList": "calendar",
+                    "getSportVenueConfig": "config",
+                }.get(endpoint)
+                if api:
+                    increment(
+                        api
+                        + (
+                            "HtmlResponses"
+                            if mime == "text/html"
+                            else "JsonResponses"
+                            if "json" in mime
+                            else "OtherResponses"
+                        )
+                    )
+                if path.endswith("/getVenueOrderList"):
+                    increment(
+                        "orderHtmlResponses"
+                        if mime == "text/html"
+                        else "orderJsonResponses"
+                        if "json" in mime
+                        else "orderOtherResponses"
+                    )
+                    status = response.get("status")
+                    if type(status) is int and 100 <= status <= 599:
+                        counts["lastOrderStatus"] = status
+                if params.get("type") == "Script":
+                    increment("scriptResponses")
+                    if mime == "text/html":
+                        increment("scriptHtmlResponses")
+                    if response.get("status", 0) >= 400:
+                        increment("scriptHttpErrors")
+            elif method == "Network.loadingFailed":
+                increment(hosts.get(params.get("requestId", ""), "otherHostFailures"))
+                increment(
+                    "orderFailures"
+                    if requests.get(params.get("requestId")) == "order"
+                    else "scriptFailures"
+                    if params.get("type") == "Script"
+                    else "otherFailures"
+                )
+                error = params.get("errorText", "")
+                if "CERT" in error or "SSL" in error:
+                    increment("tlsFailures")
+                elif "NAME_NOT_RESOLVED" in error:
+                    increment("dnsFailures")
+                if params.get("blockedReason"):
+                    increment("blockedFailures")
+    except Exception:
+        counts["performanceLogUnavailable"] = 1
+    try:
+        browser_events = driver.execute("getLog", {"type": "browser"})["value"]
+        counts["browserLogEntries"] = min(len(browser_events), 10000)
+        for entry in browser_events:
+            message = entry.get("message", "")
+            if "Content Security Policy" in message or "Content-Security-Policy" in message:
+                increment("cspErrors")
+            if "ReferenceError" in message:
+                increment("referenceErrors")
+            if "TypeError" in message:
+                increment("typeErrors")
+            if "SyntaxError" in message:
+                increment("syntaxErrors")
+            if "MIME type" in message:
+                increment("mimeTypeErrors")
+            http_error = re.search(r"status of (401|403|404|429|500|502|503)\b", message)
+            if http_error:
+                increment("consoleHttp" + http_error[1] + "Errors")
+            if "ERR_CERT" in message or "ERR_SSL" in message:
+                increment("consoleTlsErrors")
+            if "ERR_NAME_NOT_RESOLVED" in message:
+                increment("consoleDnsErrors")
+            if "unsafe-eval" in message:
+                increment("evalBlockedErrors")
+            if "Failed to load resource" in message:
+                increment("resourceLoadErrors")
+    except Exception:
+        counts["browserLogUnavailable"] = 1
+    return counts
 
 
 def _prefixed_court_name(label: str, court: str) -> str:
@@ -840,6 +1097,68 @@ def _prefixed_court_name(label: str, court: str) -> str:
     return f"{label}{name}"
 
 
+def _browser_environment(driver: webdriver.Remote) -> dict[str, Any]:
+    capabilities = getattr(driver, "capabilities", {})
+    if not isinstance(capabilities, dict):
+        return {}
+    browser = capabilities.get("browserVersion")
+    if not isinstance(browser, str) or not re.fullmatch(r"\d{1,4}(?:\.\d{1,6}){1,3}", browser):
+        return {}
+    result: dict[str, Any] = {
+        "browserVersion": browser,
+        "userAgentOverrideEnabled": False,
+        "profileResetBeforeScrape": False,
+    }
+    chrome = capabilities.get("chrome")
+    driver_value = chrome.get("chromedriverVersion") if isinstance(chrome, dict) else None
+    if isinstance(driver_value, str):
+        version = driver_value.split(" ", 1)[0]
+        if re.fullmatch(r"\d{1,4}(?:\.\d{1,6}){1,3}", version):
+            result["driverVersion"] = version
+            result["driverMajorMatchesBrowser"] = version.split(".")[0] == browser.split(".")[0]
+    return result
+
+
+def _capture_failure_ui(driver: webdriver.Remote, venue: str) -> dict[str, Any] | None:
+    """Explicit manual preflight only; capture our public page, never credentials."""
+    if os.environ.get("YDMAP_CAPTURE_BROWSER_UI") != "1":
+        return None
+    config = getattr(driver, "_ydmap_client_config", None)
+    previous = getattr(config, "timeout", None)
+    try:
+        if config is not None:
+            config.timeout = DRIVER_CLEANUP_TIMEOUT
+        sensitive = driver.execute_script(r"""
+const text = document.body?.innerText || '';
+return /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(text) ||
+  /\b1[3-9]\d{9}\b/.test(text) ||
+  /\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(text) ||
+  /(?:[0-9a-f]{0,4}:){3,7}[0-9a-f]{0,4}|\b[0-9a-f]{1,4}::[0-9a-f]+\b/i.test(text) ||
+  /扫码登录|扫码授权|扫描二维码.{0,12}登录|scan.{0,20}(?:login|log in|sign in)/i.test(text) ||
+  [...document.querySelectorAll('input[type=email],input[type=password],input[type=tel]')]
+    .some(input => !!input.value);
+""")
+        if sensitive is not False:
+            return None
+        png = driver.get_screenshot_as_png()
+        if not isinstance(png, bytes) or not 24 <= len(png) <= UI_CAPTURE_MAX_BYTES:
+            return None
+        if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+            return None
+        encoded = base64.b64encode(png).decode("ascii")
+        return {
+            "venue": venue,
+            "mime_type": "image/png",
+            "sha256": hashlib.sha256(png).hexdigest(),
+            "chunks": [encoded[offset : offset + 4096] for offset in range(0, len(encoded), 4096)],
+        }
+    except Exception:
+        return None
+    finally:
+        if config is not None:
+            config.timeout = previous
+
+
 def _stop_with_error(
     *,
     error: str,
@@ -848,7 +1167,7 @@ def _stop_with_error(
     captcha: bool = False,
 ) -> dict[str, Any]:
     observed = payload or {}
-    return {
+    result = {
         "schema_version": SCHEMA_VERSION,
         "venue": venue,
         "ok": False,
@@ -874,10 +1193,20 @@ def _stop_with_error(
                 "dataVersion",
                 "courtNames",
                 "cellCount",
+                "challengeText",
+                "challengeMaskVisible",
+                "documentComplete",
+                "scheduleComponentPresent",
+                "failurePhase",
+                "requestedProduct",
+                "accessDiagnostics",
             )
             if key in observed
         },
     }
+    if isinstance(observed.get("diagnostic_ui"), dict):
+        result["diagnostic_ui"] = observed["diagnostic_ui"]
+    return result
 
 
 def _days_payload(
@@ -896,15 +1225,19 @@ def _days_payload(
     ]
 
 
-def scrape_available_slots(
-    venue: str = DEFAULT_VENUE, days: int = DEFAULT_DAYS, *, source_evidence: bool = False
+def _scrape_available_slots(
+    venue: str,
+    days: int,
+    *,
+    source_evidence: bool,
+    runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     groups = VENUE_GROUPS.get(venue)
     if not groups:
         return _stop_with_error(error=f"unknown_venue:{venue}", venue=venue)
     days = min(max(days, 1), 7)
     # Reserve driver/browser cleanup time inside the caller's 240-second limit.
-    budget = min(SCRAPE_TIMEOUT, 135) if venue == "dsh" else SCRAPE_TIMEOUT
+    budget = min(SCRAPE_TIMEOUT, 135)
     deadline = time.monotonic() + budget - 30
     today = datetime.now(SHANGHAI).date()
     requested = [(today + timedelta(days=offset)).isoformat() for offset in range(days)]
@@ -914,16 +1247,38 @@ def scrape_available_slots(
     court_names: dict[str, list[str]] = {}
     evidence: dict[str, list[dict[str, Any]]] = {}
     source_budget: dict[str, Any] = {"remaining": SOURCE_TOTAL_BYTES, "seen": set()}
+    phase = "browser_start"
+    requested_product = parse_qs(urlparse(groups[0][2]).query)["salesItemId"][0]
+    # A larger local wire timeout must never extend the complete scrape budget.
+    # Kill only this scrape's current driver if a renderer stops answering;
+    # the reserved thirty seconds remain available for browser cleanup.
+    watchdog = threading.Timer(
+        max(0, deadline - time.monotonic()),
+        lambda: _stop_driver_service(getattr(driver, "_ydmap_service", None)),
+    )
+    watchdog.daemon = True
+    watchdog.start()
     try:
-        _cleanup_stale_browser()
-        proc = _start_chromium(groups[0][2])
-        _wait_devtools(timeout=_remaining(deadline, 40))
-        driver = _attach(timeout=_remaining(deadline, 30))
         for index, (key, label, url) in enumerate(groups):
+            requested_product = parse_qs(urlparse(url).query)["salesItemId"][0]
+            if proc is not None:
+                _stop(proc, driver)
+                proc = None
+                driver = None
+            phase = "browser_start"
             _remaining(deadline, 20)
-            if index > 0:
-                driver.set_page_load_timeout(_remaining(deadline, 20))
-                driver.get(url)
+            # A fixed private profile belongs to this product across polls.
+            # Each source opens its supported URL natively, like Dashah;
+            # no cross-product browser/app state or product-tab click is reused.
+            profile = PROFILE / f"{venue}-{key or 'main'}"
+            _cleanup_stale_browser(profile)
+            proc = _start_chromium(url, profile=profile)
+            _wait_devtools(timeout=_remaining(deadline, 40))
+            time.sleep(_remaining(deadline, 4))
+            phase = "browser_attach"
+            driver = _attach(timeout=_remaining(deadline, 30))
+            if runtime is not None:
+                runtime.update(_browser_environment(driver))
             parsed = urlparse(url)
             identity: VenueIdentity = {
                 "host": parsed.hostname or "",
@@ -931,8 +1286,16 @@ def scrape_available_slots(
                 "sales_item_id": parse_qs(parsed.query)["salesItemId"][0],
                 "label": label,
             }
-            payload = _wait_for_schedule(driver, deadline=deadline, **identity)
+            phase = "initial_schedule" if index == 0 else "product_navigation"
+            payload = _wait_for_schedule(
+                driver,
+                deadline=deadline,
+                phase=phase,
+                **identity,
+            )
             if not payload.get("ready"):
+                if source_evidence:
+                    payload["diagnostic_ui"] = _capture_failure_ui(driver, venue)
                 return _stop_with_error(
                     error=payload.get("error") or "schedule_not_ready",
                     venue=venue,
@@ -956,6 +1319,7 @@ def scrape_available_slots(
                         )
                     order.insert(0, alternatives[0])
             for booking_iso in order:
+                phase = "date_selection"
                 _remaining(deadline, 25)
                 if booking_iso not in payload.get("availableDates", []):
                     return _stop_with_error(
@@ -968,15 +1332,19 @@ def scrape_available_slots(
                 # remove a WAF mask or force a JavaScript click through it.
                 element.click()
                 previous = payload
+                phase = "refreshed_schedule"
                 payload = _wait_for_schedule(
                     driver,
                     timeout=25,
                     deadline=deadline,
                     expected_date=booking_iso,
                     previous=previous,
+                    phase=phase,
                     **identity,
                 )
                 if not payload.get("ready"):
+                    if source_evidence:
+                        payload["diagnostic_ui"] = _capture_failure_ui(driver, venue)
                     return _stop_with_error(
                         error=payload.get("error") or "schedule_not_ready",
                         venue=venue,
@@ -991,6 +1359,7 @@ def scrape_available_slots(
                 if booking_iso not in requested:
                     continue
                 if source_evidence:
+                    phase = "source_evidence"
                     _remaining(deadline, 10)
                     payload = _extract_day(driver, source_evidence=True)
                     issue = _snapshot_issue(
@@ -1045,10 +1414,50 @@ def scrape_available_slots(
             "days": _days_payload(collected, court_names, evidence),
         }
     except Exception as exc:
-        return _stop_with_error(error=type(exc).__name__, venue=venue)
+        error = type(exc).__name__
+        # Only our fixed JS sentinel codes may cross the browser exception boundary.
+        # Never publish Selenium messages, stacks, URLs or page content.
+        if error == "JavascriptException":
+            for code in (
+                "bookability_predicate_unavailable",
+                "bookability_predicate_invalid",
+                "bookability_product_type_unverified",
+            ):
+                if code in str(exc):
+                    error = code
+                    break
+        observed: dict[str, Any] = {"failurePhase": phase, "requestedProduct": requested_product}
+        if driver is not None and error in {
+            "ReadTimeoutError",
+            "MaxRetryError",
+            "ProtocolError",
+            "TimeoutException",
+            "WebDriverException",
+        }:
+            # Passive local logs/UI only; do not repeat the failed source request
+            # or interaction. Limit each diagnostic command and total lifetime.
+            config = getattr(driver, "_ydmap_client_config", None)
+            if config is not None:
+                config.timeout = DRIVER_CLEANUP_TIMEOUT
+            observed["accessDiagnostics"] = _access_diagnostics(driver)
+        return _stop_with_error(error=error, venue=venue, payload=observed)
     finally:
+        watchdog.cancel()
         if proc is not None:
             _stop(proc, driver)
+
+
+def scrape_available_slots(
+    venue: str = DEFAULT_VENUE,
+    days: int = DEFAULT_DAYS,
+    *,
+    source_evidence: bool = False,
+) -> dict[str, Any]:
+    runtime: dict[str, Any] = {}
+    result = _scrape_available_slots(venue, days, source_evidence=source_evidence, runtime=runtime)
+    if runtime:
+        result.setdefault("diagnostics", {}).update(runtime)
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1084,6 +1493,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         query = parse_qs(parsed.query)
         venue = str((query.get("venue") or [DEFAULT_VENUE])[0]).strip() or DEFAULT_VENUE
+        if venue not in VENUE_GROUPS or "verification" in query:
+            self._send_json(400, _stop_with_error(error="unsupported_inspection", venue=venue))
+            return
         try:
             days = int((query.get("days") or [str(DEFAULT_DAYS)])[0])
         except ValueError:
@@ -1093,7 +1505,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             requested_evidence = query.get("evidence") == ["source-v1"]
-            payload = scrape_available_slots(venue, days, source_evidence=requested_evidence)
+            payload = scrape_available_slots(
+                venue,
+                days,
+                source_evidence=requested_evidence,
+            )
             self._send_json(200 if payload.get("ok") else 503, payload)
         except Exception as exc:
             self._send_json(500, _stop_with_error(error=type(exc).__name__, venue=venue))

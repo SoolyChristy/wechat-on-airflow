@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { chromium, expect } from '@playwright/test';
 import { acceptanceRequestPolicy } from './public-request-policy.mjs';
+import { observeGearPromo, verifyAutomaticGearPromo, verifyManualGearPromo, verifyMobileFirstVisitGearPromo } from './gear-promo-acceptance.mjs';
 
 const expected = process.argv[2];
 assert.match(expected ?? '', /^[0-9a-f]{40}$/, 'exact Web deployment SHA is required');
@@ -20,6 +21,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce', locale: 'zh-CN', timezoneId: 'Asia/Shanghai' });
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
     const page = await context.newPage();
+    await observeGearPromo(page);
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await context.route('**/*', route => {
@@ -60,7 +62,7 @@ try {
     assert.equal(health.edge.legacyRuntime, false);
     assert.equal(health.host.ok, true);
     assert.equal(health.host.runtime, 'airflow-host');
-    assert.equal(await page.locator('.venue-card').count(), 27);
+    assert.equal(await page.locator('.venue-card').count(), 26);
     assert.equal(await page.locator('.phone-device-picker:visible').count(), 0);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
     assert.ok(overflow <= 1);
@@ -69,14 +71,15 @@ try {
       const nav = page.getByRole('navigation', { name: '快捷导航' });
       const box = await nav.boundingBox(); assert.ok(box && box.y >= 0 && box.y + box.height <= height + 1);
     }
+    const automaticGearPromo = await verifyAutomaticGearPromo(page, { output, name });
     await page.getByLabel('搜索场地').fill('前海');
     await page.waitForTimeout(100);
     assert.equal(await page.locator('.venue-card').count(), 1);
     await page.getByLabel('搜索场地').fill('no-such-court-studio-acceptance');
     await page.getByText('没有找到这个场地', { exact: true }).waitFor();
     await page.getByRole('button', { name: '查看全部场地', exact: true }).click();
-    assert.equal(await page.locator('.venue-card').count(), 27);
-    await expect(page.getByTestId('venue-card-baoti').locator('.venue-card-name')).toHaveText('宝安网球中心');
+    assert.equal(await page.locator('.venue-card').count(), 26);
+    assert.equal(await page.getByTestId('venue-card-baoti').count(), 0);
     await page.getByTestId('venue-card-tops').scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${output}/${name}-directory.png` });
     await page.getByTestId('venue-card-tops').click();
@@ -143,11 +146,16 @@ try {
     await closeGroup.click();
     await expect(group).toBeHidden();
     await expect(page.getByRole('button', { name: '更多功能', exact: true })).toBeFocused();
+    const gearPromo = await verifyManualGearPromo(page, {
+      output, name, width, height, automatic: automaticGearPromo,
+      prolonged: origin === origins[0] && view === 'desktop',
+    });
     assert.deepEqual(errors, []);
-    report.views.push({ origin, name, width, height, overflow, cards: 27, hostCommit: health.host.deploymentCommit, edgeCommit: health.edge.deploymentCommit, errors, stableVerificationControls: true, wechatGroup: true, copyWechat: true, qrDownload: true, qrSha256, passed: true });
+    report.views.push({ origin, name, width, height, overflow, cards: 26, hostCommit: health.host.deploymentCommit, edgeCommit: health.edge.deploymentCommit, errors, stableVerificationControls: true, wechatGroup: true, copyWechat: true, qrDownload: true, qrSha256, gearPromo, passed: true });
     await context.close();
   }
   }
+  report.mobileFirstVisit = await verifyMobileFirstVisitGearPromo(browser, { origin: origins[0], output });
   // Browser origin isolation only: synthetic local values, all network fulfilled.
   // This does not send a verification code or claim a real email re-verification.
   const isolation = await browser.newContext();

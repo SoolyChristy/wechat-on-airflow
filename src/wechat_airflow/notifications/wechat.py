@@ -18,7 +18,6 @@ from wechat_airflow.notifications.booking_links import (
 JsonDict = dict[str, Any]
 
 WECHAT_SEND_API_URL_VAR = "WECHAT_SEND_API_URL"
-PAUSED_SHARED_ZACKS_TARGETS_VAR = "SZ_TENNIS_CHATROOMS"
 WECHAT_SEND_DEVICE_NAME_VAR = "WECHAT_SEND_DEVICE_NAME"
 WECHAT_SEND_TIMEOUT_SECONDS_VAR = "WECHAT_SEND_TIMEOUT_SECONDS"
 WECHAT_SEND_RETRY_COUNT_VAR = "WECHAT_SEND_RETRY_COUNT"
@@ -36,7 +35,6 @@ VENUE_DEDUPE_CACHE_KEYS: dict[str, str] = {
     "gba": "大湾区网球场",
     "dsh_free": "大沙河免费场",
     "dsh": "大沙河国际网球中心",
-    "baoti": "宝安网球中心",
     "sysh": "上越沙河网球场",
     "tops": "TOPS科技园网球场",
     "fsb": "泛思博特福中福网球场",
@@ -399,18 +397,6 @@ def send_wechat_text_to_chatrooms_best_effort(
 
     receivers = _normalize_chatrooms(chatrooms)
     if not receivers:
-        return []
-    # Preserve the shared recipients for later resumption, but pause new intents.
-    try:
-        paused = set(
-            _normalize_chatrooms(_get_variable(PAUSED_SHARED_ZACKS_TARGETS_VAR, default=""))
-        )
-    except Exception:
-        print("[WECHAT_ROUTING] paused-group lookup failed; refusing to enqueue")
-        return [{"success": False, "queued": False, "error": "routing_config_unavailable"}]
-    receivers = [receiver for receiver in receivers if receiver not in paused]
-    if not receivers:
-        _release_subscription_gate_dedupe(str(booking_venue_id or ""), message)
         return []
     try:
         response = requests.post(

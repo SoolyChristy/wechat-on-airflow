@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import hashlib
 import json
@@ -12,6 +13,7 @@ import pwd
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE = Path("/opt/pi-ydmap-scraper")
+SERVICE_PROFILE = Path("/tmp/pi-ydmap-service-profile-v2")
+PROFILE_MARKER = b"pi-ydmap-service-profile-v2\n"
+RUNUSER = Path("/usr/sbin/runuser")
 UNIT = "dsh-ydmap-scraper.service"
 DROPIN = Path("/etc/systemd/system/dsh-ydmap-scraper.service.d/90-managed-release.conf")
 OTHER_UNITS = (
@@ -32,10 +37,11 @@ OTHER_UNITS = (
     "pi-appium-mcp.service",
     "cloudflared-appium-mcp.service",
 )
-TEST_NAMES = ("pi_baoti_scraper_test.py", "pi_ydmap_identity_test.py")
+TEST_NAMES = ("pi_ydmap_scraper_test.py", "pi_ydmap_identity_test.py")
 MAX_BYTES = 1_000_000
 MAX_SOURCE_EVIDENCE_BYTES = 128 * 1024
 RENDERER_METHODS = {
+    "isAvailableStatic",
     "textFun",
     "isNoBook",
     "classObj",
@@ -112,13 +118,39 @@ SOURCE_LITERAL_ALLOWLIST = SOURCE_CLASSES | {
 SOURCE_STRING = re.compile(r'"(?:[^"\\\r\n]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"')
 PUBLIC_TEXT = re.compile(r"[\w\u3400-\u9fff ·.()（）-]{1,120}")
 MARKER = "# Managed Pi YDMap release\n"
-DAG_IDS = ("大沙河国际网球中心巡检", "宝安网球中心巡检")
+DAG_IDS = ("大沙河国际网球中心巡检",)
 LEASE_SECONDS = 1620
 PROOF_MARGIN_SECONDS = 90
 ACTIVATION_SECONDS = 540
 ROLLBACK_SECONDS = 150
 ACTIVATION_LEASE_REQUIRED = ACTIVATION_SECONDS + ROLLBACK_SECONDS + 60
 SOURCE_FAILURES = {
+    "product_tab_not_found",
+    "ReadTimeoutError",
+    "MaxRetryError",
+    "ProtocolError",
+    "ConnectionResetError",
+    "ConnectionRefusedError",
+    "JavascriptException",
+    "SessionNotCreatedException",
+    "ElementClickInterceptedException",
+    "ElementNotInteractableException",
+    "StaleElementReferenceException",
+    "NoSuchElementException",
+    "InvalidArgumentException",
+    "MoveTargetOutOfBoundsException",
+    "OSError",
+    "PermissionError",
+    "IndexError",
+    "RuntimeError",
+    "KeyError",
+    "TypeError",
+    "ValueError",
+    "AttributeError",
+    "FileNotFoundError",
+    "bookability_predicate_unavailable",
+    "bookability_predicate_invalid",
+    "bookability_product_type_unverified",
     "captcha",
     "rate_limited",
     "login_required",
@@ -148,6 +180,25 @@ SOURCE_FAILURES = {
     "ConnectionError",
 }
 SOURCE_FIELDS = {
+    "completedCandidateCycles",
+    "failedVenueDiagnostics",
+    "accessDiagnostics",
+    "browserVersion",
+    "driverVersion",
+    "driverMajorMatchesBrowser",
+    "userAgentVersionMatchesBrowser",
+    "userAgentOverrideEnabled",
+    "profileResetBeforeScrape",
+    "verificationAttempted",
+    "verificationOutcome",
+    "verificationControl",
+    "failedVenues",
+    "failurePhase",
+    "requestedProduct",
+    "challengeText",
+    "challengeMaskVisible",
+    "documentComplete",
+    "scheduleComponentPresent",
     "pageHost",
     "selectedDate",
     "queryDate",
@@ -166,12 +217,103 @@ SOURCE_FIELDS = {
 }
 PRODUCTS = {
     "dsh": {"": ("100000", "")},
-    "baoti": {
-        "outdoor": ("111317", "室外"),
-        "indoor": ("103224", "室内"),
-        "windrain": ("111319", "风雨"),
-    },
 }
+ERROR_CLASSES = {
+    "OperationFailure",
+    "OSError",
+    "PermissionError",
+    "FileNotFoundError",
+    "FileExistsError",
+    "NotADirectoryError",
+    "IsADirectoryError",
+    "TimeoutError",
+    "ConnectionError",
+    "ConnectionRefusedError",
+    "ConnectionResetError",
+    "BrokenPipeError",
+    "URLError",
+    "HTTPError",
+    "JSONDecodeError",
+    "UnicodeDecodeError",
+    "TypeError",
+    "ValueError",
+    "KeyError",
+    "AttributeError",
+    "IndexError",
+    "RuntimeError",
+    "TimeoutExpired",
+    "CalledProcessError",
+    "EOFError",
+    "SSHException",
+    "AuthenticationException",
+    "BadHostKeyException",
+    "NoValidConnectionsError",
+}
+FAILURE_PHASES = {
+    "main": "operation_setup",
+    "other_service_identities": "service_snapshot",
+    "verify_existing_service": "existing_service_verification",
+    "prepare_candidate": "candidate_prepare",
+    "isolated_candidate": "candidate_runtime",
+    "inspect_venues": "venue_inspection",
+    "activate": "activation",
+    "verify_checkout": "checkout_verification",
+    "remote": "remote_operation",
+    "apply_with_guard": "airflow_drain",
+}
+FAILURE_FUNCTIONS = set(FAILURE_PHASES) | {
+    "operate",
+    "service_properties",
+    "request_json",
+    "checked_runuser",
+    "inspect_evidence",
+    "verify_health",
+    "wait_idle",
+    "active_connections",
+    "wait_health",
+    "validate_drain_proof",
+    "run",
+    "digest",
+    "atomic_bytes",
+    "atomic_link",
+    "encode_report",
+}
+
+
+def safe_error_class(value: object) -> str:
+    return value if isinstance(value, str) and value in ERROR_CLASSES else "Exception"
+
+
+def safe_failure_diagnostic(value: object) -> dict | None:
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("phase"), str)
+        or value.get("phase") not in set(FAILURE_PHASES.values())
+        or not isinstance(value.get("function"), str)
+        or value.get("function") not in FAILURE_FUNCTIONS
+        or type(value.get("line")) is not int
+        or not 1 <= value["line"] <= 100000
+    ):
+        return None
+    return {key: value[key] for key in ("phase", "function", "line")}
+
+
+def failure_details(exc: Exception, *, source_file: str = __file__) -> dict:
+    # Only named functions/lines from our exact source; never messages, paths or locals.
+    phase = "operation_setup"
+    location = None
+    trace = exc.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        if code.co_filename == source_file and code.co_name in FAILURE_FUNCTIONS:
+            if phase == "operation_setup" and code.co_name != "main":
+                phase = FAILURE_PHASES.get(code.co_name, phase)
+            location = {"phase": phase, "function": code.co_name, "line": trace.tb_lineno}
+        trace = trace.tb_next
+    return {
+        "errorClass": safe_error_class(type(exc).__name__),
+        "failureDiagnostic": safe_failure_diagnostic(location),
+    }
 
 
 class OperationFailure(RuntimeError):
@@ -184,6 +326,35 @@ class OperationFailure(RuntimeError):
         self.service_diagnostic = None
         self.source_failure = None
         self.source_diagnostic = {}
+        self.diagnostic_ui = None
+
+
+def safe_diagnostic_ui(value: object) -> dict | None:
+    if not isinstance(value, dict) or set(value) != {"venue", "mime_type", "sha256", "chunks"}:
+        return None
+    if value.get("venue") not in PRODUCTS or value.get("mime_type") != "image/png":
+        return None
+    chunks = value.get("chunks")
+    if (
+        not isinstance(chunks, list)
+        or not 1 <= len(chunks) <= 86
+        or any(not isinstance(chunk, str) or not 1 <= len(chunk) <= 4096 for chunk in chunks)
+    ):
+        return None
+    try:
+        png = base64.b64decode("".join(chunks), validate=True)
+    except (ValueError, TypeError):
+        return None
+    if not 24 <= len(png) <= 256 * 1024 or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    if not png.endswith(b"\x00\x00\x00\x00IEND\xaeB`\x82"):
+        return None
+    width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    if not (1 <= width <= 4096 and 1 <= height <= 4096):
+        return None
+    if value.get("sha256") != hashlib.sha256(png).hexdigest():
+        return None
+    return {key: value[key] for key in ("venue", "mime_type", "sha256", "chunks")}
 
 
 def safe_source_failure(value: object) -> str | None:
@@ -194,10 +365,101 @@ def safe_source_failure(value: object) -> str | None:
     return value if value in SOURCE_FAILURES else None
 
 
-def safe_source_diagnostic(value: object) -> dict:
+def safe_source_diagnostic(value: object, *, nested: bool = False) -> dict:
     if not isinstance(value, dict):
         return {}
     result = {}
+    failures = value.get("failedVenueDiagnostics")
+    if not nested and isinstance(failures, dict):
+        result["failedVenueDiagnostics"] = {
+            venue: {
+                "sourceFailure": safe_source_failure(item.get("sourceFailure")),
+                "sourceDiagnostic": safe_source_diagnostic(
+                    item.get("sourceDiagnostic"), nested=True
+                ),
+            }
+            for venue, item in failures.items()
+            if venue in PRODUCTS and isinstance(item, dict)
+        }
+    access = value.get("accessDiagnostics")
+    if isinstance(access, dict):
+        result["accessDiagnostics"] = {
+            key: access[key]
+            for key in (
+                "documentHidden",
+                "documentFocused",
+                "appRootPresent",
+                "vueRootPresent",
+                "scriptReferences",
+                "httpErrors",
+                "documentHttpErrors",
+                "faviconHttpErrors",
+                "scriptHtmlResponses",
+                "typeErrors",
+                "syntaxErrors",
+                "mimeTypeErrors",
+                "consoleHttp401Errors",
+                "consoleHttp403Errors",
+                "consoleHttp404Errors",
+                "consoleHttp429Errors",
+                "consoleHttp500Errors",
+                "consoleHttp502Errors",
+                "consoleHttp503Errors",
+                "consoleTlsErrors",
+                "consoleDnsErrors",
+                "maskRoots",
+                "maskChildren",
+                "semanticHandles",
+                "legacyHandles",
+                "frames",
+                "accessibleFrames",
+                "verificationScripts",
+                "settledLegacyHandles",
+                "settledSemanticHandles",
+                "settledFrames",
+                "settledMaskChildren",
+                "orderHtmlResponses",
+                "catalogHtmlResponses",
+                "catalogJsonResponses",
+                "catalogOtherResponses",
+                "calendarHtmlResponses",
+                "calendarJsonResponses",
+                "calendarOtherResponses",
+                "configHtmlResponses",
+                "configJsonResponses",
+                "configOtherResponses",
+                "orderJsonResponses",
+                "orderOtherResponses",
+                "lastOrderStatus",
+                "scriptResponses",
+                "scriptHttpErrors",
+                "orderFailures",
+                "scriptFailures",
+                "otherFailures",
+                "tlsFailures",
+                "dnsFailures",
+                "blockedFailures",
+                "cspErrors",
+                "referenceErrors",
+                "evalBlockedErrors",
+                "resourceLoadErrors",
+                "performanceLogEntries",
+                "performanceLogUnavailable",
+                "browserLogEntries",
+                "browserLogUnavailable",
+                "aliyunCdnFailures",
+                "ydmapFailures",
+                "otherHostFailures",
+            )
+            if type(access.get(key)) is int and 0 <= access[key] <= 10000
+        }
+    failed_venues = value.get("failedVenues")
+    if (
+        isinstance(failed_venues, list)
+        and 1 <= len(failed_venues) <= 2
+        and all(isinstance(venue, str) and venue in PRODUCTS for venue in failed_venues)
+    ):
+        result["failedVenues"] = list(dict.fromkeys(failed_venues))
     # Presence alone is useful when a provider changed field types. No unknown
     # string, URL, cookie, body fragment or error message is forwarded.
     present = value.get("present", {})
@@ -215,11 +477,29 @@ def safe_source_diagnostic(value: object) -> dict:
                 result[key] = candidate
         except ValueError:
             pass
-    for key in ("selectedSalesId", "sourceSalesId", "selectedProduct", "sourceProduct"):
+    for key in (
+        "selectedSalesId",
+        "sourceSalesId",
+        "selectedProduct",
+        "sourceProduct",
+        "requestedProduct",
+    ):
         candidate = value.get(key)
         if isinstance(candidate, str) and re.fullmatch(r"[0-9]{1,12}", candidate):
             result[key] = candidate
-    for key in ("loadingCounter", "loadGeneration", "cellCount"):
+    phase = value.get("failurePhase")
+    if isinstance(phase, str) and phase in {
+        "browser_start",
+        "browser_attach",
+        "product_navigation",
+        "initial_schedule",
+        "date_selection",
+        "refreshed_schedule",
+        "source_evidence",
+        "access_verification",
+    }:
+        result["failurePhase"] = phase
+    for key in ("loadingCounter", "loadGeneration", "cellCount", "completedCandidateCycles"):
         candidate = value.get(key)
         if type(candidate) is int and 0 <= candidate <= 1_000_000:
             result[key] = candidate
@@ -227,8 +507,45 @@ def safe_source_diagnostic(value: object) -> dict:
         result["pageHost"] = value["pageHost"]
     if value.get("productNameField") in {"salesItemName", "itemName", "name"}:
         result["productNameField"] = value["productNameField"]
-    if type(value.get("productInCatalog")) is bool:
-        result["productInCatalog"] = value["productInCatalog"]
+    for key in (
+        "verificationAttempted",
+        "driverMajorMatchesBrowser",
+        "userAgentVersionMatchesBrowser",
+        "userAgentOverrideEnabled",
+        "profileResetBeforeScrape",
+        "productInCatalog",
+        "challengeText",
+        "challengeMaskVisible",
+        "documentComplete",
+        "scheduleComponentPresent",
+    ):
+        if type(value.get(key)) is bool:
+            result[key] = value[key]
+    for key in ("browserVersion", "driverVersion"):
+        version = value.get(key)
+        if isinstance(version, str) and re.fullmatch(r"\d{1,4}(?:\.\d{1,6}){1,3}", version):
+            result[key] = version
+    outcome = value.get("verificationOutcome")
+    if isinstance(outcome, str) and outcome in {
+        "not_needed",
+        "unsupported_control",
+        "not_passed",
+        "passed",
+    }:
+        result["verificationOutcome"] = outcome
+    control = value.get("verificationControl")
+    if isinstance(control, str) and control in {
+        "wrong_host",
+        "root_missing",
+        "controls_missing",
+        "ambiguous_controls",
+        "instruction_unrecognized",
+        "geometry_invalid",
+        "control_obstructed",
+        "ready",
+        "probe_failed",
+    }:
+        result["verificationControl"] = control
     product_name = value.get("productName")
     if isinstance(product_name, str) and PUBLIC_TEXT.fullmatch(product_name):
         result["productName"] = product_name
@@ -548,7 +865,9 @@ def encode_report(report: dict, *, source_evidence: bool = False) -> str:
             bounded["sourceEvidenceRejected"] = (
                 rejected or bounded.get("sourceEvidenceRejected") is True
             )
-    encoded = json.dumps(bounded, ensure_ascii=False, sort_keys=True)
+    # GitHub CLI log readers can omit a single large JSON line. Keep source
+    # evidence reviewable line-by-line while enforcing the actual UTF-8 budget.
+    encoded = json.dumps(bounded, ensure_ascii=False, sort_keys=True, indent=2)
     if len(encoded.encode("utf-8")) + 1 >= MAX_BYTES:
         encoded = json.dumps(
             {
@@ -590,6 +909,12 @@ def run(argv: list[str], *, timeout: int = 30) -> str:
     if result.returncode or len(result.stdout) > MAX_BYTES:
         raise OperationFailure("command_failed")
     return result.stdout.decode("utf-8")
+
+
+def checked_runuser() -> str:
+    if not RUNUSER.is_file() or not os.access(RUNUSER, os.X_OK):
+        raise OperationFailure("runuser_unavailable")
+    return str(RUNUSER)
 
 
 def digest(path: Path) -> str:
@@ -640,6 +965,7 @@ def request_json(port: int, path: str, *, timeout: int = 5) -> dict:
                 failure.source_diagnostic = safe_source_diagnostic(
                     failed_payload.get("diagnostics")
                 )
+                failure.diagnostic_ui = safe_diagnostic_ui(failed_payload.get("diagnostic_ui"))
         except (ValueError, OSError):
             pass
         raise failure from None
@@ -651,6 +977,21 @@ def request_json(port: int, path: str, *, timeout: int = 5) -> dict:
     return value
 
 
+def live_ready(payload: dict) -> dict:
+    if (
+        payload.get("ok") is not True
+        or payload.get("service") != "dsh_ydmap"
+        or payload.get("protocolVersion") != 2
+        or sorted(payload.get("venues") or []) != ["dsh"]
+    ):
+        raise OperationFailure("scraper_not_ready")
+    report = {"liveServiceReady": True, "protocolVersion": 2, "venues": ["dsh"]}
+    commit = payload.get("deploymentCommit")
+    if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
+        report["deploymentCommit"] = commit
+    return report
+
+
 def verify_health(payload: dict, commit: str, source_hash: str) -> dict:
     if (
         payload.get("ok") is not True
@@ -658,14 +999,14 @@ def verify_health(payload: dict, commit: str, source_hash: str) -> dict:
         or payload.get("protocolVersion") != 2
         or payload.get("deploymentCommit") != commit
         or payload.get("sourceSha256") != source_hash
-        or sorted(payload.get("venues", [])) != ["baoti", "dsh"]
+        or sorted(payload.get("venues", [])) != ["dsh"]
     ):
         raise OperationFailure("scraper_identity_mismatch")
     return {
         "protocolVersion": 2,
         "deploymentCommit": commit,
         "sourceSha256": source_hash,
-        "venues": ["baoti", "dsh"],
+        "venues": ["dsh"],
     }
 
 
@@ -709,7 +1050,7 @@ def validate_drain_proof(value: object, commit: str, *, remaining: int = 30) -> 
     ):
         raise OperationFailure("dag_drain_proof_required")
     dags = value.get("dags")
-    if not isinstance(dags, list) or not 1 <= len(dags) <= 2:
+    if not isinstance(dags, list) or len(dags) != 1:
         raise OperationFailure("dag_drain_proof_required")
     if any(
         not isinstance(dag, dict)
@@ -755,7 +1096,8 @@ def inspect_evidence(
     payload: dict, venue: str, expected_dates: list[str], *, source_evidence: bool = False
 ) -> dict:
     if (
-        payload.get("ok") is not True
+        venue not in PRODUCTS
+        or payload.get("ok") is not True
         or payload.get("captcha") is not False
         or payload.get("schema_version") != 2
         or payload.get("venue") != venue
@@ -798,9 +1140,7 @@ def inspect_evidence(
                 label and label not in product_name
             ):
                 raise OperationFailure("product_identity_mismatch")
-            expected_host, expected_sales = (
-                ("wxsports.ydmap.cn", "100220") if venue == "dsh" else ("bawtt.ydmap.cn", "104036")
-            )
+            expected_host, expected_sales = "wxsports.ydmap.cn", "100220"
             if (
                 group.get("source_host") != expected_host
                 or str(group.get("source_sales_id")) != expected_sales
@@ -854,6 +1194,20 @@ def inspect_evidence(
         )
     report = {"venue": venue, "verified": True, "days": report_days}
     if source_evidence:
+        diagnostic = safe_source_diagnostic(payload.get("diagnostics"))
+        for key in (
+            "verificationAttempted",
+            "verificationOutcome",
+            "verificationControl",
+            "browserVersion",
+            "driverVersion",
+            "driverMajorMatchesBrowser",
+            "userAgentVersionMatchesBrowser",
+            "userAgentOverrideEnabled",
+            "profileResetBeforeScrape",
+        ):
+            if key in diagnostic:
+                report[key] = diagnostic[key]
         truncated, unresolved = limit_source_evidence([report])
         report["sourceEvidenceTruncated"] = truncated
         report["sourceEvidenceRejected"] = rejected_source or unresolved
@@ -876,6 +1230,21 @@ def safe_inspections(value: object, *, source_evidence: bool = False) -> list[di
             if not isinstance(days, list) or not 1 <= len(days) <= 7:
                 return []
             raw = {
+                "diagnostics": {
+                    key: report[key]
+                    for key in (
+                        "verificationAttempted",
+                        "verificationOutcome",
+                        "verificationControl",
+                        "browserVersion",
+                        "driverVersion",
+                        "driverMajorMatchesBrowser",
+                        "userAgentVersionMatchesBrowser",
+                        "userAgentOverrideEnabled",
+                        "profileResetBeforeScrape",
+                    )
+                    if key in report
+                },
                 "ok": True,
                 "captcha": False,
                 "schema_version": 2,
@@ -903,11 +1272,15 @@ def safe_inspections(value: object, *, source_evidence: bool = False) -> list[di
 
 
 def inspect_venues(
-    port: int, *, at: datetime | None = None, source_evidence: bool = False
+    port: int,
+    *,
+    at: datetime | None = None,
+    source_evidence: bool = False,
 ) -> list[dict]:
     reports = []
+    failures = []
     local = at or datetime.now(ZoneInfo("Asia/Shanghai"))
-    for venue, days, timeout in (("dsh", 5 if local.hour >= 12 else 4, 150), ("baoti", 2, 240)):
+    for venue, days, timeout in (("dsh", 5 if local.hour >= 12 else 4, 150),):
         today = local.date()
         expected = [(today + timedelta(days=offset)).isoformat() for offset in range(days)]
         try:
@@ -921,6 +1294,48 @@ def inspect_venues(
         except OperationFailure as exc:
             exc.venue = venue
             exc.inspections = reports
+            if not source_evidence:
+                raise
+            failures.append(exc)
+    if failures:
+        # Keep the bounded source evidence from the failed Dashah inspection.
+        # A failed candidate never authorizes activation.
+        failure = failures[-1]
+        failure.diagnostic_ui = next(
+            (item.diagnostic_ui for item in reversed(failures) if item.diagnostic_ui), None
+        )
+        failure.inspections = reports
+        failure.source_diagnostic = {
+            **(failure.source_diagnostic or {}),
+            "failedVenues": [item.venue for item in failures],
+            "failedVenueDiagnostics": {
+                item.venue: {
+                    "sourceFailure": safe_source_failure(item.source_failure),
+                    "sourceDiagnostic": safe_source_diagnostic(item.source_diagnostic, nested=True),
+                }
+                for item in failures
+            },
+        }
+        raise failure
+    return reports
+
+
+def inspect_quiesced_candidate(port: int, proof: dict, commit: str) -> list[dict]:
+    """Three read-only cycles on the same profiles, stopping at the first failure."""
+    started = time.monotonic()
+    reports = []
+    for cycle in range(3):
+        if cycle:
+            time.sleep(max(0, started + 120 - time.monotonic()))
+        validate_drain_proof(proof, commit)
+        started = time.monotonic()
+        try:
+            reports = inspect_venues(port, source_evidence=True)
+        except OperationFailure as exc:
+            exc.source_diagnostic = {
+                **(exc.source_diagnostic or {}),
+                "completedCandidateCycles": cycle,
+            }
             raise
     return reports
 
@@ -1015,6 +1430,46 @@ def wait_idle() -> None:
     raise OperationFailure("scraper_drain_timeout")
 
 
+def service_profile(account: pwd.struct_passwd) -> Path:
+    """Keep only this service's browser state on the Pi, never a personal profile."""
+    uid, gid = account.pw_uid, account.pw_gid
+    if type(uid) is not int or uid <= 0 or type(gid) is not int or gid < 0:
+        raise OperationFailure("unrecognized_service_profile")
+    profile = SERVICE_PROFILE
+    temporary = Path("/tmp").resolve()
+    if (
+        profile.is_symlink()
+        or profile.resolve() == temporary
+        or not profile.resolve().is_relative_to(temporary)
+    ):
+        raise OperationFailure("unrecognized_service_profile")
+    try:
+        profile.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    else:
+        marker = profile / ".pi-ydmap-profile"
+        marker.write_bytes(PROFILE_MARKER)
+        marker.chmod(0o600)
+        os.chown(marker, uid, gid)
+        os.chown(profile, uid, gid)
+    state = profile.lstat()
+    marker = profile / ".pi-ydmap-profile"
+    if (
+        not stat.S_ISDIR(state.st_mode)
+        or state.st_uid != uid
+        or stat.S_IMODE(state.st_mode) != 0o700
+        or marker.is_symlink()
+        or not marker.is_file()
+        or marker.stat().st_uid != uid
+        or stat.S_IMODE(marker.stat().st_mode) != 0o600
+        or marker.stat().st_size != len(PROFILE_MARKER)
+        or marker.read_bytes() != PROFILE_MARKER
+    ):
+        raise OperationFailure("unrecognized_service_profile")
+    return profile
+
+
 def prepare_candidate(
     staging: Path, commit: str, source_hash: str, account: pwd.struct_passwd
 ) -> Path:
@@ -1051,7 +1506,7 @@ def prepare_candidate(
     run(["/usr/bin/python3", "-m", "py_compile", str(server)])
     result = subprocess.run(
         [
-            "runuser",
+            checked_runuser(),
             "-u",
             account.pw_name,
             "--",
@@ -1086,7 +1541,15 @@ def prepare_candidate(
 
 
 @contextlib.contextmanager
-def isolated_candidate(candidate: Path, account: pwd.struct_passwd, commit: str):
+def isolated_candidate(
+    candidate: Path,
+    account: pwd.struct_passwd,
+    commit: str,
+    *,
+    profile: Path | None = None,
+    capture_browser_ui: bool = False,
+):
+    executable = checked_runuser()
     runtime = Path(tempfile.mkdtemp(prefix="pi-ydmap-candidate-"))
     os.chown(runtime, account.pw_uid, account.pw_gid)
     environment = {
@@ -1097,25 +1560,27 @@ def isolated_candidate(candidate: Path, account: pwd.struct_passwd, commit: str)
         "XDG_RUNTIME_DIR": f"/run/user/{account.pw_uid}",
         "YDMAP_LISTEN_PORT": "18788",
         "YDMAP_DEBUG_PORT": "19224",
-        "YDMAP_PROFILE": str(runtime / "profile"),
+        "YDMAP_PROFILE": str(profile or runtime / "profile"),
         "YDMAP_DEPLOYMENT_COMMIT": commit,
         "PYTHONDONTWRITEBYTECODE": "1",
+        "YDMAP_CAPTURE_BROWSER_UI": "1" if capture_browser_ui else "0",
     }
-    process = subprocess.Popen(
-        [
-            "runuser",
-            "-u",
-            account.pw_name,
-            "--",
-            "/usr/bin/python3",
-            str(candidate / "pi_host/dsh_ydmap/server.py"),
-        ],
-        env=environment,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    process = None
     try:
+        process = subprocess.Popen(
+            [
+                executable,
+                "-u",
+                account.pw_name,
+                "--",
+                "/usr/bin/python3",
+                str(candidate / "pi_host/dsh_ydmap/server.py"),
+            ],
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if process.poll() is not None:
@@ -1129,24 +1594,25 @@ def isolated_candidate(candidate: Path, account: pwd.struct_passwd, commit: str)
             raise OperationFailure("candidate_start_failed")
         yield 18788
     finally:
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=5)
-        subprocess.run(
-            [
-                "pkill",
-                "-TERM",
-                "-f",
-                r"^/usr/lib/chromium/chromium .*--remote-debugging-port=19224( |$)",
-            ],
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
+        if process is not None:
+            subprocess.run(
+                [
+                    "pkill",
+                    "-TERM",
+                    "-f",
+                    r"^/usr/lib/chromium/chromium .*--remote-debugging-port=19224( |$)",
+                ],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
         # Only this candidate's directory is removed; active and legacy profiles are untouched.
         shutil.rmtree(runtime)
 
@@ -1165,7 +1631,14 @@ def wait_health(commit: str, source_hash: str) -> dict:
     raise OperationFailure("installed_health_failed")
 
 
-def activate(candidate: Path, commit: str, source_hash: str, drain_proof: dict) -> dict:
+def activate(
+    candidate: Path,
+    commit: str,
+    source_hash: str,
+    drain_proof: dict | None,
+    *,
+    allow_interruption: bool = False,
+) -> dict:
     current = BASE / "current"
     if current.exists() and not current.is_symlink():
         raise OperationFailure("unrecognized_current_release")
@@ -1178,11 +1651,12 @@ def activate(candidate: Path, commit: str, source_hash: str, drain_proof: dict) 
         "dropin": previous_dropin.decode() if previous_dropin else None,
     }
     atomic_bytes(candidate / "rollback.json", json.dumps(backup).encode())
-    validate_drain_proof(drain_proof, commit, remaining=ACTIVATION_LEASE_REQUIRED + 250)
-    wait_idle()
-    # wait_idle itself may consume 240 seconds. Recheck at the last point before
-    # the live unit can change, reserving both live inspections and rollback.
-    validate_drain_proof(drain_proof, commit, remaining=ACTIVATION_LEASE_REQUIRED)
+    if not allow_interruption:
+        validate_drain_proof(drain_proof, commit, remaining=ACTIVATION_LEASE_REQUIRED + 250)
+        wait_idle()
+        # wait_idle itself may consume 240 seconds. Recheck at the last point before
+        # the live unit can change, reserving live inspection and rollback.
+        validate_drain_proof(drain_proof, commit, remaining=ACTIVATION_LEASE_REQUIRED)
     try:
         with bounded_action(ACTIVATION_SECONDS):
             run(["systemctl", "stop", UNIT])
@@ -1192,21 +1666,23 @@ def activate(candidate: Path, commit: str, source_hash: str, drain_proof: dict) 
                 f"ExecStart=/usr/bin/python3 {current}/server.py\n"
                 f"Environment=YDMAP_DEPLOYMENT_COMMIT={commit}\n"
                 "Environment=YDMAP_LISTEN_PORT=8788\nEnvironment=YDMAP_DEBUG_PORT=9224\n"
-                "Environment=YDMAP_PROFILE=/tmp/dsh_ydmap_profile\n"
+                f"Environment=YDMAP_PROFILE={SERVICE_PROFILE}\n"
             )
             atomic_bytes(DROPIN, override.encode(), mode=0o644)
             run(["systemctl", "daemon-reload"])
             run(["systemctl", "start", UNIT])
             report = wait_health(commit, source_hash)
-            # The real systemd environment can differ from the isolated
-            # candidate. Both real listener inspections are part of activation.
-            inspections = inspect_venues(8788)
-            report = verify_health(request_json(8788, "/healthz"), commit, source_hash)
+            # A release may replace the listener without a multi-minute page
+            # inspection. The next natural DAG run is the business check.
+            inspections: list[dict] = []
+            if not allow_interruption:
+                inspections = inspect_venues(8788)
+                report = verify_health(request_json(8788, "/healthz"), commit, source_hash)
             return {
                 "applied": True,
                 "health": report,
                 "inspections": inspections,
-                "liveInspectionsVerified": True,
+                "liveInspectionsVerified": not allow_interruption,
                 "rollbackAvailable": True,
             }
     except Exception as activation_error:
@@ -1256,34 +1732,80 @@ def activate(candidate: Path, commit: str, source_hash: str, drain_proof: dict) 
 
 
 def operate(args) -> dict:
+    verification_once = getattr(args, "verification_once", False)
+    first_product = getattr(args, "first_product", "")
+    drain_preflight = getattr(args, "drain_preflight", False)
+    capture_browser_ui = getattr(args, "capture_browser_ui", False)
+    allow_interruption = getattr(args, "allow_interruption", False)
+    if capture_browser_ui and args.operation != "preflight":
+        raise OperationFailure("verification_not_authorized")
+    if drain_preflight and args.operation != "preflight":
+        raise OperationFailure("verification_not_authorized")
+    if allow_interruption and args.operation != "apply":
+        raise OperationFailure("verification_not_authorized")
+    # Retired Baoan-only diagnostic options must fail before host access.
+    if verification_once or first_product:
+        raise OperationFailure("verification_not_authorized")
     before = other_service_identities()
-    account = verify_existing_service()
-    if args.operation == "apply":
-        validate_drain_proof(args.drain_proof, args.commit)
-    if args.operation in {"health", "inspect"}:
-        health = verify_health(request_json(8788, "/healthz"), args.commit, args.source_sha256)
-        evidence = inspect_venues(8788) if args.operation == "inspect" else []
-        report = {"health": health, "inspections": evidence, "applied": False}
-    else:
-        candidate = prepare_candidate(args.staging, args.commit, args.source_sha256, account)
-        with isolated_candidate(candidate, account, args.commit) as port:
-            health = verify_health(request_json(port, "/healthz"), args.commit, args.source_sha256)
-            evidence = (
-                inspect_venues(port, source_evidence=True)
-                if args.operation == "preflight"
-                else inspect_venues(port)
-            )
-        if before != other_service_identities():
-            raise OperationFailure("unrelated_service_changed")
+    if args.operation == "ready":
+        verify_existing_service()
         report = {
-            "health": health,
-            "inspections": evidence,
-            "candidateVerified": True,
             "applied": False,
+            "candidateVerified": False,
+            "inspections": [],
+            **live_ready(request_json(8788, "/healthz")),
         }
-        if args.operation == "apply":
+    elif allow_interruption:
+        account = verify_existing_service()
+        candidate = prepare_candidate(args.staging, args.commit, args.source_sha256, account)
+        report = activate(candidate, args.commit, args.source_sha256, None, allow_interruption=True)
+    else:
+        account = verify_existing_service()
+        if args.operation == "apply" or drain_preflight:
             validate_drain_proof(args.drain_proof, args.commit)
-            report.update(activate(candidate, args.commit, args.source_sha256, args.drain_proof))
+            wait_idle()
+            validate_drain_proof(args.drain_proof, args.commit)
+        if args.operation in {"health", "inspect"}:
+            health = verify_health(request_json(8788, "/healthz"), args.commit, args.source_sha256)
+            evidence = inspect_venues(8788) if args.operation == "inspect" else []
+            report = {"health": health, "inspections": evidence, "applied": False}
+        else:
+            candidate = prepare_candidate(args.staging, args.commit, args.source_sha256, account)
+            candidate_options = {
+                **(
+                    {"profile": service_profile(account)}
+                    if args.operation == "apply" or drain_preflight
+                    else {}
+                ),
+                **({"capture_browser_ui": True} if capture_browser_ui else {}),
+            }
+            with isolated_candidate(candidate, account, args.commit, **candidate_options) as port:
+                health = verify_health(
+                    request_json(port, "/healthz"), args.commit, args.source_sha256
+                )
+                if drain_preflight:
+                    evidence = inspect_quiesced_candidate(port, args.drain_proof, args.commit)
+                else:
+                    evidence = (
+                        inspect_venues(port, source_evidence=True)
+                        if args.operation == "preflight"
+                        else inspect_venues(port)
+                    )
+            if before != other_service_identities():
+                raise OperationFailure("unrelated_service_changed")
+            report = {
+                "health": health,
+                "inspections": evidence,
+                "candidateVerified": True,
+                "applied": False,
+            }
+            if drain_preflight:
+                report["candidateVerifiedCycles"] = 3
+            if args.operation == "apply":
+                validate_drain_proof(args.drain_proof, args.commit)
+                report.update(
+                    activate(candidate, args.commit, args.source_sha256, args.drain_proof)
+                )
     unchanged = before == other_service_identities()
     if not unchanged:
         raise OperationFailure("unrelated_service_changed")
@@ -1298,10 +1820,13 @@ def operate(args) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("preflight", "apply", "health", "inspect"))
+    parser.add_argument("operation", choices=("ready", "preflight", "apply", "health", "inspect"))
     parser.add_argument("--commit", required=True)
     parser.add_argument("--source-sha256", required=True)
     parser.add_argument("--staging", type=Path)
+    parser.add_argument("--drain-preflight", action="store_true")
+    parser.add_argument("--allow-interruption", action="store_true")
+    parser.add_argument("--capture-browser-ui", action="store_true")
     args = parser.parse_args()
 
     def interrupted(signum, frame):
@@ -1318,7 +1843,11 @@ def main() -> int:
             raise OperationFailure("root_required")
         if args.operation in {"preflight", "apply"} and not args.staging:
             raise OperationFailure("staging_required")
-        args.drain_proof = json.load(sys.stdin) if args.operation == "apply" else None
+        args.drain_proof = (
+            json.load(sys.stdin)
+            if (args.operation == "apply" or args.drain_preflight) and not args.allow_interruption
+            else None
+        )
         encoded = encode_report(
             {**operate(args), "operationComplete": True},
             source_evidence=args.operation == "preflight",
@@ -1331,7 +1860,7 @@ def main() -> int:
                 {
                     "ok": False,
                     "operationComplete": True,
-                    "errorClass": type(exc).__name__,
+                    **failure_details(exc),
                     "failure": exc.code
                     if isinstance(exc, OperationFailure)
                     else "operation_failed",
@@ -1350,6 +1879,11 @@ def main() -> int:
                     if isinstance(exc, OperationFailure)
                     else {},
                     "externalTestSends": 0,
+                    **(
+                        {"diagnostic_ui": safe_diagnostic_ui(exc.diagnostic_ui)}
+                        if args.capture_browser_ui and isinstance(exc, OperationFailure)
+                        else {}
+                    ),
                 },
                 source_evidence=args.operation == "preflight",
             )
